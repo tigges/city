@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Admin · {{TITLE}}</title>
+    <meta name="robots" content="noindex" />
+    <meta name="theme-color" content="#4f46e5" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body class="admin-page">
+    <main class="admin-wrap">
+      <header class="brand">
+        <span class="brand-pin" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z"/></svg>
+        </span>
+        <div>
+          <h1>Admin</h1>
+          <p class="subtitle"><a href="/">{{TITLE}}</a></p>
+        </div>
+      </header>
+
+      <form id="key-form" class="card">
+        <h2>Enter the admin key</h2>
+        <label class="field">
+          <span>Admin key</span>
+          <input id="key" type="password" autocomplete="off" required />
+        </label>
+        <p id="key-error" class="form-error" role="alert" hidden></p>
+        <button class="btn-primary" type="submit"><span class="btn-label">Open admin</span></button>
+        <p class="hint">It's the <code>ADMIN_KEY</code> value under Environment in the Render dashboard.</p>
+      </form>
+
+      <section id="admin" class="card" hidden>
+        <div class="admin-head">
+          <h2 id="count">Entries</h2>
+          <button type="button" id="lock" class="btn-ghost">Lock</button>
+        </div>
+        <label class="field">
+          <span>Search</span>
+          <input id="search" type="search" placeholder="Name, city, country or industry" autocomplete="off" />
+        </label>
+        <ul id="rows" class="admin-rows"></ul>
+        <p id="none" class="empty" hidden>No entries.</p>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+
+    <script>
+      (() => {
+        const $ = (id) => document.getElementById(id);
+        const KEY = "city-map:admin-key";
+        let entries = [];
+
+        function el(tag, props = {}, ...children) {
+          const node = Object.assign(document.createElement(tag), props);
+          for (const child of children) node.append(child);
+          return node;
+        }
+
+        function toast(message) {
+          $("toast").textContent = message;
+          $("toast").hidden = false;
+          clearTimeout(toast.timer);
+          toast.timer = setTimeout(() => ($("toast").hidden = true), 2800);
+        }
+
+        function showLocked(error = "") {
+          sessionStorage.removeItem(KEY);
+          $("admin").hidden = true;
+          $("key-form").hidden = false;
+          $("key-error").textContent = error;
+          $("key-error").hidden = !error;
+        }
+
+        async function load(key) {
+          const res = await fetch("/api/admin/entries", { headers: { "x-admin-key": key }, cache: "no-store" });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) return showLocked(data.error || "Something went wrong.");
+          sessionStorage.setItem(KEY, key);
+          entries = data.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+          $("key-form").hidden = true;
+          $("admin").hidden = false;
+          render();
+        }
+
+        function render() {
+          const q = $("search").value.trim().toLowerCase();
+          const shown = entries.filter((e) => !q || [e.name, e.city, e.country, e.industry].join(" ").toLowerCase().includes(q));
+          $("count").textContent = `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`;
+          $("rows").replaceChildren(...shown.map((e) => {
+            const del = el("button", { type: "button", className: "btn-ghost danger", textContent: "Delete" });
+            del.addEventListener("click", () => remove(e));
+            return el("li", { className: "admin-row" },
+              el("div", { className: "person-text" },
+                el("strong", { textContent: e.name }),
+                el("span", { textContent: [`${e.city}, ${e.country}`, e.industry].filter(Boolean).join(" · ") }),
+                el("span", { className: "muted-small", textContent: `Added ${new Date(e.createdAt).toLocaleString()}` }),
+              ),
+              del,
+            );
+          }));
+          $("none").hidden = shown.length > 0;
+        }
+
+        async function remove(e) {
+          if (!confirm(`Delete ${e.name} (${e.city}, ${e.country}) from the map?`)) return;
+          const res = await fetch(`/api/entries/${e.id}`, { method: "DELETE", headers: { "x-admin-key": sessionStorage.getItem(KEY) || "" } });
+          if (res.status === 401) return showLocked("Please enter the admin key again.");
+          if (!res.ok && res.status !== 404) return toast("Couldn't delete that entry. Please try again.");
+          entries = entries.filter((x) => x.id !== e.id);
+          render();
+          toast(`${e.name} was removed.`);
+        }
+
+        $("key-form").addEventListener("submit", (ev) => {
+          ev.preventDefault();
+          load($("key").value.trim());
+        });
+        $("search").addEventListener("input", render);
+        $("lock").addEventListener("click", () => showLocked());
+
+        const saved = sessionStorage.getItem(KEY);
+        if (saved) load(saved);
+      })();
+    </script>
+  </body>
+</html>
