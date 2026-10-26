@@ -14,6 +14,7 @@ const UPSTASH_KEY = process.env.UPSTASH_KEY || "city-map:entries";
 const MAX_ENTRIES = 2000;
 const SITE_PASSWORD = process.env.SITE_PASSWORD || "";
 const INDUSTRY_REQUIRED = /^(1|true|yes)$/i.test(process.env.INDUSTRY_REQUIRED || "");
+const PUBLIC_URL = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || "").replace(/\/+$/, "");
 const AUTH_COOKIE = "group_map_auth";
 const AUTH_TOKEN = SITE_PASSWORD ? crypto.createHmac("sha256", SITE_PASSWORD).update("group-map-auth").digest("hex") : "";
 
@@ -23,6 +24,7 @@ const STATIC_TYPES = {
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".svg": "image/svg+xml",
+  ".png": "image/png",
   ".ico": "image/x-icon",
 };
 
@@ -199,6 +201,18 @@ function isAuthed(req) {
   return !!cookies[AUTH_COOKIE] && safeEqual(cookies[AUTH_COOKIE], AUTH_TOKEN);
 }
 
+function isAdmin(req) {
+  return !!ADMIN_KEY && safeEqual(req.headers["x-admin-key"] || "", ADMIN_KEY);
+}
+
+// Link previews (WhatsApp etc.) need an absolute og:image URL.
+function siteOrigin(req) {
+  if (PUBLIC_URL) return PUBLIC_URL;
+  const proto = String(req.headers["x-forwarded-proto"] || "http").split(",")[0].trim();
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || `localhost:${PORT}`).split(",")[0].trim();
+  return `${proto}://${host.replace(/[^\w.:-]/g, "")}`;
+}
+
 async function readForm(req) {
   let size = 0;
   const chunks = [];
@@ -257,15 +271,22 @@ const loginTemplate = fs
   .readFileSync(path.join(__dirname, "views", "login.html"), "utf8")
   .replaceAll("{{TITLE}}", escapeHtml(APP_TITLE));
 
-function sendLogin(res, status, error = "") {
-  const html = loginTemplate.replace("{{ERROR}}", error ? `<p class="form-error" role="alert">${escapeHtml(error)}</p>` : "");
-  send(res, status, html, { "Content-Type": STATIC_TYPES[".html"] });
+const adminHtml = fs
+  .readFileSync(path.join(__dirname, "views", "admin.html"), "utf8")
+  .replaceAll("{{TITLE}}", escapeHtml(APP_TITLE));
+
+function sendHtml(req, res, status, html) {
+  send(res, status, html.replaceAll("{{ORIGIN}}", siteOrigin(req)), { "Content-Type": STATIC_TYPES[".html"], "Cache-Control": "no-cache" });
+}
+
+function sendLogin(req, res, status, error = "") {
+  sendHtml(req, res, status, loginTemplate.replace("{{ERROR}}", error ? `<p class="form-error" role="alert">${escapeHtml(error)}</p>` : ""));
 }
 
 async function handleLogin(req, res) {
-  if (rateLimited(`login:${clientIp(req)}`)) return sendLogin(res, 429, "Too many attempts. Please wait a minute.");
+  if (rateLimited(`login:${clientIp(req)}`)) return sendLogin(req, res, 429, "Too many attempts. Please wait a minute.");
   const form = await readForm(req);
-  if (!safeEqual(form.get("password") || "", SITE_PASSWORD)) return sendLogin(res, 401, "That password isn't right.");
+  if (!safeEqual(form.get("password") || "", SITE_PASSWORD)) return sendLogin(req, res, 401, "That password isn't right.");
   const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
   res.writeHead(303, {
     Location: "/",
@@ -326,12 +347,23 @@ async function handleApi(req, res, url) {
     return send(res, 201, publicEntry(entry));
   }
 
+  if (url.pathname === "/api/admin/entries" && req.method === "GET") {
+    if (!ADMIN_KEY) return send(res, 503, { error: "ADMIN_KEY isn't set on the server." });
+    if (!isAdmin(req)) {
+      if (rateLimited(`admin:${clientIp(req)}`)) return send(res, 429, { error: "Too many attempts. Please wait a minute." });
+      return send(res, 401, { error: "That admin key isn't right." });
+    }
+    const entries = await store.load();
+    return send(res, 200, entries.map(publicEntry));
+  }
+
   const match = url.pathname.match(/^\/api\/entries\/([\w-]+)$/);
   if (match && req.method === "DELETE") {
     const body = await readJson(req);
-    const isAdmin = ADMIN_KEY && req.headers["x-admin-key"] === ADMIN_KEY;
+    const admin = isAdmin(req);
+    if (req.headers["x-admin-key"] && !admin) return send(res, 401, { error: "That admin key isn't right." });
     const removed = await mutate((entries) => {
-      const i = entries.findIndex((e) => e.id === match[1] && (isAdmin || (body.clientId && e.clientId === body.clientId)));
+      const i = entries.findIndex((e) => e.id === match[1] && (admin || (body.clientId && e.clientId === body.clientId)));
       if (i === -1) return false;
       entries.splice(i, 1);
       return true;
@@ -343,9 +375,8 @@ async function handleApi(req, res, url) {
 }
 
 function serveStatic(req, res, url) {
-  if (url.pathname === "/" || url.pathname === "/index.html") {
-    return send(res, 200, indexHtml, { "Content-Type": STATIC_TYPES[".html"], "Cache-Control": "no-cache" });
-  }
+  if (url.pathname === "/" || url.pathname === "/index.html") return sendHtml(req, res, 200, indexHtml);
+  if (url.pathname === "/admin") return sendHtml(req, res, 200, adminHtml);
   const filePath = path.normalize(path.join(PUBLIC_DIR, url.pathname));
   if (!filePath.startsWith(PUBLIC_DIR + path.sep)) return send(res, 404, "Not found");
   fs.readFile(filePath, (err, data) => {
@@ -363,10 +394,10 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/healthz") return send(res, 200, "ok");
     if (SITE_PASSWORD) {
       if (url.pathname === "/login" && req.method === "POST") return await handleLogin(req, res);
-      const isAsset = /\.(css|svg|ico)$/.test(url.pathname);
-      if (!isAsset && !isAuthed(req)) {
+      const isAsset = /\.(css|svg|png|ico)$/.test(url.pathname);
+      if (!isAsset && !isAuthed(req) && !isAdmin(req)) {
         if (url.pathname.startsWith("/api/")) return send(res, 401, { error: "Please enter the group password first." });
-        return sendLogin(res, 200);
+        return sendLogin(req, res, 200);
       }
     }
     if (url.pathname.startsWith("/api/")) return await handleApi(req, res, url);
@@ -380,4 +411,5 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Group map running on http://localhost:${PORT} (storage: ${store === redisStore ? "Upstash Redis" : DATA_FILE})`);
+  console.log(SITE_PASSWORD ? "Site password is on." : "No SITE_PASSWORD set: anyone with the link can see the map.");
 });
