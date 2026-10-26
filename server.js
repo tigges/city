@@ -12,6 +12,10 @@ const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL || "";
 const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
 const UPSTASH_KEY = process.env.UPSTASH_KEY || "city-map:entries";
 const MAX_ENTRIES = 2000;
+const SITE_PASSWORD = process.env.SITE_PASSWORD || "";
+const INDUSTRY_REQUIRED = /^(1|true|yes)$/i.test(process.env.INDUSTRY_REQUIRED || "");
+const AUTH_COOKIE = "group_map_auth";
+const AUTH_TOKEN = SITE_PASSWORD ? crypto.createHmac("sha256", SITE_PASSWORD).update("group-map-auth").digest("hex") : "";
 
 const PUBLIC_DIR = path.join(__dirname, "public");
 const STATIC_TYPES = {
@@ -169,12 +173,41 @@ async function geocode(city, country) {
 // ---------- helpers ----------
 
 const rateBuckets = new Map();
-function rateLimited(ip) {
+function rateLimited(key) {
   const now = Date.now();
-  const recent = (rateBuckets.get(ip) || []).filter((t) => now - t < 60_000);
+  const recent = (rateBuckets.get(key) || []).filter((t) => now - t < 60_000);
   recent.push(now);
-  rateBuckets.set(ip, recent);
+  rateBuckets.set(key, recent);
   return recent.length > 10;
+}
+
+function clientIp(req) {
+  return (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim();
+}
+
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a));
+  const y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+function isAuthed(req) {
+  if (!SITE_PASSWORD) return true;
+  const cookies = Object.fromEntries(
+    (req.headers.cookie || "").split(";").map((c) => c.trim().split("=")).filter(([k]) => k).map(([k, ...v]) => [k, v.join("=")]),
+  );
+  return !!cookies[AUTH_COOKIE] && safeEqual(cookies[AUTH_COOKIE], AUTH_TOKEN);
+}
+
+async function readForm(req) {
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 10_000) throw Object.assign(new Error("Request too large"), { status: 413 });
+    chunks.push(chunk);
+  }
+  return new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
 }
 
 function clean(value, max) {
@@ -216,7 +249,30 @@ function escapeHtml(s) {
 
 const indexHtml = fs
   .readFileSync(path.join(PUBLIC_DIR, "index.html"), "utf8")
+  .replaceAll("{{TITLE}}", escapeHtml(APP_TITLE))
+  .replaceAll("{{INDUSTRY_REQUIRED}}", String(INDUSTRY_REQUIRED))
+  .replaceAll("{{INDUSTRY_HINT}}", INDUSTRY_REQUIRED ? "" : ' <em class="optional">optional</em>');
+
+const loginTemplate = fs
+  .readFileSync(path.join(__dirname, "views", "login.html"), "utf8")
   .replaceAll("{{TITLE}}", escapeHtml(APP_TITLE));
+
+function sendLogin(res, status, error = "") {
+  const html = loginTemplate.replace("{{ERROR}}", error ? `<p class="form-error" role="alert">${escapeHtml(error)}</p>` : "");
+  send(res, status, html, { "Content-Type": STATIC_TYPES[".html"] });
+}
+
+async function handleLogin(req, res) {
+  if (rateLimited(`login:${clientIp(req)}`)) return sendLogin(res, 429, "Too many attempts. Please wait a minute.");
+  const form = await readForm(req);
+  if (!safeEqual(form.get("password") || "", SITE_PASSWORD)) return sendLogin(res, 401, "That password isn't right.");
+  const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
+  res.writeHead(303, {
+    Location: "/",
+    "Set-Cookie": `${AUTH_COOKIE}=${AUTH_TOKEN}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax${secure}`,
+  });
+  res.end();
+}
 
 // ---------- routes ----------
 
@@ -227,15 +283,16 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === "/api/entries" && req.method === "POST") {
-    const ip = (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim();
-    if (rateLimited(ip)) return send(res, 429, { error: "Too many submissions, please wait a minute." });
+    if (rateLimited(`post:${clientIp(req)}`)) return send(res, 429, { error: "Too many submissions, please wait a minute." });
 
     const body = await readJson(req);
     const name = clean(body.name, 40);
     const city = clean(body.city, 80);
     const country = clean(body.country, 60);
+    const industry = clean(body.industry, 60);
     const clientId = clean(body.clientId, 64);
     if (!name || !city || !country) return send(res, 400, { error: "Please fill in your name, city and country." });
+    if (INDUSTRY_REQUIRED && !industry) return send(res, 400, { error: "Please fill in your industry." });
 
     let place;
     try {
@@ -252,6 +309,7 @@ async function handleApi(req, res, url) {
         name,
         city: place.city,
         country: place.country,
+        industry: industry || undefined,
         lat: place.lat,
         lon: place.lon,
         createdAt: existing?.createdAt || new Date().toISOString(),
@@ -303,6 +361,14 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   try {
     if (url.pathname === "/healthz") return send(res, 200, "ok");
+    if (SITE_PASSWORD) {
+      if (url.pathname === "/login" && req.method === "POST") return await handleLogin(req, res);
+      const isAsset = /\.(css|svg|ico)$/.test(url.pathname);
+      if (!isAsset && !isAuthed(req)) {
+        if (url.pathname.startsWith("/api/")) return send(res, 401, { error: "Please enter the group password first." });
+        return sendLogin(res, 200);
+      }
+    }
     if (url.pathname.startsWith("/api/")) return await handleApi(req, res, url);
     if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, "Method not allowed");
     return serveStatic(req, res, url);

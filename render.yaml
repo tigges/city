@@ -9,6 +9,12 @@ services:
     envVars:
       - key: APP_TITLE
         value: Where is everyone?
+      # Shared password for the whole site. Leave empty for no password.
+      - key: SITE_PASSWORD
+        sync: false
+      # "true" makes the Industry field mandatory; anything else keeps it optional.
+      - key: INDUSTRY_REQUIRED
+        value: "false"
       - key: ADMIN_KEY
         generateValue: true
       # Render's free plan has no persistent disk, so use a free Upstash Redis database

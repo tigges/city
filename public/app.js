@@ -56,6 +56,12 @@
     $("countries").append(...[...countries].sort().map((value) => el("option", { value })));
   } catch {}
 
+  $("industries").append(
+    ...["Agriculture", "Arts & Media", "Construction", "Consulting", "Education", "Energy", "Finance", "Government",
+      "Healthcare", "Hospitality", "Legal", "Manufacturing", "Marketing", "Non-profit", "Real Estate", "Retail",
+      "Student", "Technology", "Transport & Logistics", "Retired"].map((value) => el("option", { value })),
+  );
+
   // ---------- map ----------
   const map = L.map("map", { worldCopyJump: true, zoomControl: false }).setView([25, 10], 2);
   L.control.zoom({ position: "topright" }).addTo(map);
@@ -96,7 +102,7 @@
       });
       const popup = el("div", {},
         el("div", { className: "popup-place", textContent: `${first.city}, ${first.country}` }),
-        el("ul", { className: "popup-names" }, ...group.map((e) => el("li", { textContent: e.name }))),
+        el("ul", { className: "popup-names" }, ...group.map((e) => el("li", { textContent: e.industry ? `${e.name} · ${e.industry}` : e.name }))),
       );
       marker.bindPopup(popup);
       marker.addTo(markerLayer);
@@ -125,7 +131,10 @@
       if (e.id === me.entryId) nameEl.append(el("span", { className: "you-badge", textContent: "YOU" }));
       const btn = el("button", { type: "button", className: "person" },
         el("span", { className: "avatar", textContent: initials(e.name), style: `background:${colorFor(e.city)}` }),
-        el("span", { className: "person-text" }, nameEl, el("span", { textContent: `${e.city}, ${e.country}` })),
+        el("span", { className: "person-text" }, nameEl, el("span", {},
+          `${e.city}, ${e.country}`,
+          ...(e.industry ? [" · ", el("span", { className: "industry-tag", textContent: e.industry })] : []),
+        )),
       );
       btn.addEventListener("click", () => focusEntry(e));
       list.append(el("li", {}, btn));
@@ -161,6 +170,7 @@
   async function load() {
     try {
       const res = await fetch("/api/entries", { cache: "no-store" });
+      if (res.status === 401) return location.reload();
       if (!res.ok) throw new Error();
       entries = await res.json();
       if (me.entryId && !myEntry()) {
@@ -176,6 +186,9 @@
   // ---------- form ----------
   const form = $("entry-form");
   const fields = ["name", "city", "country"].map($);
+  const industry = $("industry");
+  const industryRequired = industry.dataset.required === "true";
+  const requiredFields = industryRequired ? [...fields, industry] : fields;
 
   function showError(message) {
     $("form-error").textContent = message;
@@ -186,13 +199,13 @@
     ev.preventDefault();
     showError("");
     let firstInvalid = null;
-    for (const f of fields) {
+    for (const f of requiredFields) {
       const bad = !f.value.trim();
       f.setAttribute("aria-invalid", String(bad));
       if (bad && !firstInvalid) firstInvalid = f;
     }
     if (firstInvalid) {
-      showError("Please fill in your name, city and country.");
+      showError(industryRequired ? "Please fill in your name, city, country and industry." : "Please fill in your name, city and country.");
       firstInvalid.focus();
       return;
     }
@@ -204,7 +217,7 @@
       const res = await fetch("/api/entries", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: fields[0].value, city: fields[1].value, country: fields[2].value, clientId: me.clientId }),
+        body: JSON.stringify({ name: fields[0].value, city: fields[1].value, country: fields[2].value, industry: industry.value, clientId: me.clientId }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Something went wrong. Please try again.");
@@ -223,7 +236,7 @@
     }
   });
 
-  for (const f of fields) f.addEventListener("input", () => f.setAttribute("aria-invalid", "false"));
+  for (const f of requiredFields) f.addEventListener("input", () => f.setAttribute("aria-invalid", "false"));
 
   $("edit-me").addEventListener("click", () => {
     const mine = myEntry();
@@ -232,6 +245,7 @@
     fields[0].value = mine.name;
     fields[1].value = mine.city;
     fields[2].value = mine.country;
+    industry.value = mine.industry || "";
     showError("");
     renderMe();
     fields[1].focus();
