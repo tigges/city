@@ -40,7 +40,7 @@ button { font: inherit; cursor: pointer; }
   min-height: 360px;
   order: -1;
 }
-#map { position: absolute; inset: 0; background: #e8ecf3; }
+#map { position: absolute; inset: 0; background: #aad3df; }
 
 @media (min-width: 900px) {
   .layout { flex-direction: row; height: 100vh; }

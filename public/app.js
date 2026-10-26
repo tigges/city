@@ -59,10 +59,9 @@
   // ---------- map ----------
   const map = L.map("map", { worldCopyJump: true, zoomControl: false }).setView([25, 10], 2);
   L.control.zoom({ position: "topright" }).addTo(map);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
-    subdomains: "abcd",
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   }).addTo(map);
   const markerLayer = L.layerGroup().addTo(map);
   const markersByPlace = new Map();
