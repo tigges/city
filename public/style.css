@@ -285,6 +285,27 @@ h1 { font-size: 1.4rem; font-weight: 800; }
 .btn-ghost.danger { color: var(--danger); }
 .btn-ghost.danger:hover { background: #fef2f2; }
 .hint { margin: 12px 0 0; color: var(--muted); font-size: 0.85rem; }
+.hint.top { margin: -6px 0 14px; }
+.admin-row .answer { white-space: normal; overflow-wrap: anywhere; }
+.field-rows { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.field-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.field-label, .field-select {
+  font: inherit;
+  font-size: 16px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #f9fafb;
+  color: var(--text);
+}
+.field-label { flex: 1 1 180px; min-width: 0; }
+.field-label:focus, .field-select:focus { outline: none; border-color: var(--primary); background: #fff; box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.15); }
+.field-select[disabled] { opacity: 0.6; }
+.field-fixed { color: var(--muted); font-size: 0.8rem; padding: 0 6px; }
+.field-actions { display: flex; gap: 8px; align-items: center; }
+.field-actions .btn-primary { flex: 1; }
+.btn-ghost[disabled] { opacity: 0.5; cursor: not-allowed; }
+.popup-names a { color: var(--primary); font-weight: 600; }
 
 /* ---------- industry filter ---------- */
 .filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }

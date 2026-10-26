@@ -12,7 +12,7 @@ services:
       # Shared password for the whole site. Leave empty for no password.
       - key: SITE_PASSWORD
         sync: false
-      # "true" makes the Industry field mandatory; anything else keeps it optional.
+      # Starting setting for Industry ("true" = mandatory). Once fields are saved on /admin, those settings win.
       - key: INDUSTRY_REQUIRED
         value: "false"
       - key: ADMIN_KEY
