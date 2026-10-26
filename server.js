@@ -76,49 +76,94 @@ function mutate(fn) {
   return run;
 }
 
-// ---------- geocoding (OpenStreetMap Nominatim) ----------
+// ---------- geocoding ----------
+// Several free, keyless providers are tried in turn because Nominatim often blocks shared cloud IPs.
 
-const geoCache = new Map();
-let geoChain = Promise.resolve();
-
-async function nominatim(params) {
-  const url = new URL("https://nominatim.openstreetmap.org/search");
-  for (const [k, v] of Object.entries({ format: "jsonv2", limit: "1", addressdetails: "1", "accept-language": "en", ...params })) {
-    url.searchParams.set(k, v);
+const USER_AGENT = "city-group-map/1.0 (https://github.com/tigges/city)";
+const COUNTRY_ALIASES = {
+  uk: "GB", "great britain": "GB", britain: "GB", england: "GB", scotland: "GB", wales: "GB", "northern ireland": "GB",
+  usa: "US", us: "US", america: "US", "united states of america": "US", uae: "AE", holland: "NL",
+  russia: "RU", "south korea": "KR", korea: "KR", "north korea": "KP", "czech republic": "CZ", turkey: "TR",
+};
+const countryCodes = new Map(Object.entries(COUNTRY_ALIASES));
+try {
+  const names = new Intl.DisplayNames(["en"], { type: "region" });
+  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  for (const a of letters) for (const b of letters) {
+    const name = names.of(a + b);
+    if (name && name !== a + b && !countryCodes.has(name.toLowerCase())) countryCodes.set(name.toLowerCase(), a + b);
   }
-  const res = await fetch(url, {
-    headers: { "User-Agent": "city-group-map/1.0 (https://github.com/tigges/city)" },
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!res.ok) throw new Error(`Geocoder error ${res.status}`);
-  const [hit] = await res.json();
-  return hit || null;
+} catch {}
+
+function countryCodeFor(country) {
+  const c = country.toLowerCase().replace(/^the\s+/, "").trim();
+  if (countryCodes.has(c)) return countryCodes.get(c);
+  if (/^[a-z]{2}$/.test(c)) return c.toUpperCase();
+  return null;
 }
 
-function geocode(city, country) {
-  const key = `${city}|${country}`.toLowerCase();
-  if (geoCache.has(key)) return Promise.resolve(geoCache.get(key));
+async function getJson(url, headers = {}) {
+  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, ...headers }, signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error(`${new URL(url).host} responded ${res.status}`);
+  return res.json();
+}
 
-  // Nominatim's usage policy allows ~1 request/second, so lookups are serialized.
-  const job = geoChain.then(async () => {
-    const pause = () => new Promise((r) => setTimeout(r, 1000));
-    const lookup = (params) => nominatim(params).catch(() => pause().then(() => nominatim(params)));
-    let hit = await lookup({ city, country });
-    if (!hit) {
-      await pause();
-      hit = await lookup({ q: `${city}, ${country}` });
+function sameCountry(code, name, wantCode, wantName) {
+  if (wantCode && code) return code.toUpperCase() === wantCode;
+  return !!name && name.toLowerCase().includes(wantName.toLowerCase());
+}
+
+async function openMeteo(city, country, code) {
+  const url = new URL("https://geocoding-api.open-meteo.com/v1/search");
+  url.search = new URLSearchParams({ name: city, count: "20", language: "en", format: "json" });
+  const { results = [] } = await getJson(url);
+  const hit = results.find((r) => sameCountry(r.country_code, r.country, code, country));
+  return hit && { lat: hit.latitude, lon: hit.longitude, country: hit.country };
+}
+
+async function photon(city, country, code) {
+  const url = new URL("https://photon.komoot.io/api/");
+  url.search = new URLSearchParams({ q: `${city}, ${country}`, limit: "10", lang: "en" });
+  const { features = [] } = await getJson(url);
+  const hit = features.find((f) => sameCountry(f.properties.countrycode, f.properties.country, code, country));
+  return hit && { lat: hit.geometry.coordinates[1], lon: hit.geometry.coordinates[0], country: hit.properties.country };
+}
+
+async function nominatim(city, country, code) {
+  const url = new URL("https://nominatim.openstreetmap.org/search");
+  url.search = new URLSearchParams({ format: "jsonv2", limit: "1", addressdetails: "1", "accept-language": "en", city });
+  if (code) url.searchParams.set("countrycodes", code.toLowerCase());
+  else url.searchParams.set("country", country);
+  const [hit] = await getJson(url);
+  return hit && { lat: Number(hit.lat), lon: Number(hit.lon), country: hit.address?.country };
+}
+
+const geoCache = new Map();
+
+async function geocode(city, country) {
+  const key = `${city}|${country}`.toLowerCase();
+  if (geoCache.has(key)) return geoCache.get(key);
+
+  const code = countryCodeFor(country);
+  const countryName = code ? new Intl.DisplayNames(["en"], { type: "region" }).of(code) : country;
+  let hit = null;
+  let failures = 0;
+  const providers = [openMeteo, photon, nominatim];
+  for (const provider of providers) {
+    try {
+      hit = await provider(city, country, code);
+      if (hit) break;
+    } catch (err) {
+      failures++;
+      console.warn(`Geocoder ${provider.name} failed for "${city}, ${country}": ${err.message}`);
     }
-    await pause();
-    // Nominatim often names the admin boundary ("Greater London"), so keep the user's own spelling.
-    const displayCity = city === city.toLowerCase() ? city.replace(/(^|[\s-])\p{L}/gu, (m) => m.toUpperCase()) : city;
-    const result = hit
-      ? { lat: Number(hit.lat), lon: Number(hit.lon), city: displayCity, country: hit.address?.country || country }
-      : null;
-    geoCache.set(key, result);
-    return result;
-  });
-  geoChain = job.catch(() => {});
-  return job;
+  }
+  if (!hit && failures === providers.length) throw new Error("All geocoders failed");
+
+  const displayCity = city === city.toLowerCase() ? city.replace(/(^|[\s-])\p{L}/gu, (m) => m.toUpperCase()) : city;
+  const result = hit ? { lat: hit.lat, lon: hit.lon, city: displayCity, country: hit.country || countryName } : null;
+  geoCache.set(key, result);
+  return result;
 }
 
 // ---------- helpers ----------
