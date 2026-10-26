@@ -30,22 +30,24 @@ const STATIC_TYPES = {
 
 // ---------- storage ----------
 
-const fileStore = {
-  async load() {
-    try {
-      return JSON.parse(await fs.promises.readFile(DATA_FILE, "utf8"));
-    } catch (err) {
-      if (err.code === "ENOENT") return [];
-      throw err;
-    }
-  },
-  async save(entries) {
-    await fs.promises.mkdir(DATA_DIR, { recursive: true });
-    const tmp = `${DATA_FILE}.${process.pid}.tmp`;
-    await fs.promises.writeFile(tmp, JSON.stringify(entries));
-    await fs.promises.rename(tmp, DATA_FILE);
-  },
-};
+function fileStore(file, empty) {
+  return {
+    async load() {
+      try {
+        return JSON.parse(await fs.promises.readFile(file, "utf8"));
+      } catch (err) {
+        if (err.code === "ENOENT") return empty;
+        throw err;
+      }
+    },
+    async save(value) {
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      const tmp = `${file}.${process.pid}.tmp`;
+      await fs.promises.writeFile(tmp, JSON.stringify(value));
+      await fs.promises.rename(tmp, file);
+    },
+  };
+}
 
 async function upstash(command) {
   const res = await fetch(UPSTASH_URL, {
@@ -57,17 +59,21 @@ async function upstash(command) {
   return (await res.json()).result;
 }
 
-const redisStore = {
-  async load() {
-    const raw = await upstash(["GET", UPSTASH_KEY]);
-    return raw ? JSON.parse(raw) : [];
-  },
-  async save(entries) {
-    await upstash(["SET", UPSTASH_KEY, JSON.stringify(entries)]);
-  },
-};
+function redisStore(key, empty) {
+  return {
+    async load() {
+      const raw = await upstash(["GET", key]);
+      return raw ? JSON.parse(raw) : empty;
+    },
+    async save(value) {
+      await upstash(["SET", key, JSON.stringify(value)]);
+    },
+  };
+}
 
-const store = UPSTASH_URL && UPSTASH_TOKEN ? redisStore : fileStore;
+const USE_REDIS = !!(UPSTASH_URL && UPSTASH_TOKEN);
+const store = USE_REDIS ? redisStore(UPSTASH_KEY, []) : fileStore(DATA_FILE, []);
+const settingsStore = USE_REDIS ? redisStore(`${UPSTASH_KEY}:settings`, null) : fileStore(path.join(DATA_DIR, "settings.json"), null);
 
 // All writes go through this chain so concurrent submissions can't clobber each other.
 let writeChain = Promise.resolve();
@@ -80,6 +86,61 @@ function mutate(fn) {
   });
   writeChain = run.catch(() => {});
   return run;
+}
+
+// ---------- form fields ----------
+// Name, city and country are fixed. Everything else is configurable from /admin.
+// Industry is built in (stored as entry.industry, used by the filter); other answers live in entry.extra.
+
+const FIELD_MODES = ["off", "optional", "required"];
+const FIELD_TYPES = ["text", "link"];
+const MAX_FIELDS = 8;
+const DEFAULT_FIELDS = [{ id: "industry", label: "Industry", type: "text", mode: INDUSTRY_REQUIRED ? "required" : "optional" }];
+
+let fieldsCache = null;
+async function getFields() {
+  if (!fieldsCache) fieldsCache = (await settingsStore.load())?.fields || DEFAULT_FIELDS;
+  return fieldsCache;
+}
+
+async function activeFields() {
+  return (await getFields()).filter((f) => f.mode !== "off");
+}
+
+function validateFields(input) {
+  if (!Array.isArray(input) || input.length > MAX_FIELDS) throw badRequest(`You can have up to ${MAX_FIELDS} fields.`);
+  const seen = new Set();
+  const fields = input.map((f) => {
+    const id = String(f?.id || "");
+    if (!/^[a-z0-9-]{1,40}$/.test(id) || seen.has(id)) throw badRequest("Invalid field id.");
+    seen.add(id);
+    const label = clean(f.label, 40);
+    if (!label) throw badRequest("Every field needs a name.");
+    if (!FIELD_MODES.includes(f.mode)) throw badRequest(`Invalid setting for "${label}".`);
+    const type = id === "industry" ? "text" : f.type;
+    if (!FIELD_TYPES.includes(type)) throw badRequest(`Invalid type for "${label}".`);
+    return { id, label, type, mode: f.mode };
+  });
+  if (!seen.has("industry")) throw badRequest("Industry can be turned off but not removed.");
+  return fields;
+}
+
+function normalizeLink(value) {
+  try {
+    const url = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`);
+    if (!/^https?:$/.test(url.protocol) || !url.hostname.includes(".")) return null;
+    return url.href.length <= 300 ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function fieldValue(entry, id) {
+  return id === "industry" ? entry.industry : entry.extra?.[id];
+}
+
+function badRequest(message) {
+  return Object.assign(new Error(message), { status: 400 });
 }
 
 // ---------- geocoding ----------
@@ -228,8 +289,15 @@ function clean(value, max) {
   return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
-function publicEntry({ clientId, ...rest }) {
-  return rest;
+// Answers to fields that are switched off are kept, but only admins see them.
+function publicEntry({ clientId, ...rest }, active) {
+  if (!active) return rest;
+  const out = { ...rest };
+  delete out.extra;
+  if (!active.some((f) => f.id === "industry")) delete out.industry;
+  const extra = Object.fromEntries(active.filter((f) => rest.extra?.[f.id]).map((f) => [f.id, rest.extra[f.id]]));
+  if (Object.keys(extra).length) out.extra = extra;
+  return out;
 }
 
 function send(res, status, body, headers = {}) {
@@ -263,9 +331,11 @@ function escapeHtml(s) {
 
 const indexHtml = fs
   .readFileSync(path.join(PUBLIC_DIR, "index.html"), "utf8")
-  .replaceAll("{{TITLE}}", escapeHtml(APP_TITLE))
-  .replaceAll("{{INDUSTRY_REQUIRED}}", String(INDUSTRY_REQUIRED))
-  .replaceAll("{{INDUSTRY_HINT}}", INDUSTRY_REQUIRED ? "" : ' <em class="optional">optional</em>');
+  .replaceAll("{{TITLE}}", escapeHtml(APP_TITLE));
+
+function jsonForHtml(value) {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
 
 const loginTemplate = fs
   .readFileSync(path.join(__dirname, "views", "login.html"), "utf8")
@@ -299,8 +369,8 @@ async function handleLogin(req, res) {
 
 async function handleApi(req, res, url) {
   if (url.pathname === "/api/entries" && req.method === "GET") {
-    const entries = await store.load();
-    return send(res, 200, entries.map(publicEntry));
+    const [entries, active] = await Promise.all([store.load(), activeFields()]);
+    return send(res, 200, entries.map((e) => publicEntry(e, active)));
   }
 
   if (url.pathname === "/api/entries" && req.method === "POST") {
@@ -310,10 +380,20 @@ async function handleApi(req, res, url) {
     const name = clean(body.name, 40);
     const city = clean(body.city, 80);
     const country = clean(body.country, 60);
-    const industry = clean(body.industry, 60);
     const clientId = clean(body.clientId, 64);
     if (!name || !city || !country) return send(res, 400, { error: "Please fill in your name, city and country." });
-    if (INDUSTRY_REQUIRED && !industry) return send(res, 400, { error: "Please fill in your industry." });
+
+    const active = await activeFields();
+    const answers = {};
+    for (const f of active) {
+      // Pages opened before the field settings existed send industry at the top level.
+      let value = clean(body.fields?.[f.id] ?? (f.id === "industry" ? body.industry : ""), f.type === "link" ? 300 : 100);
+      if (value && f.type === "link" && !(value = normalizeLink(value))) {
+        return send(res, 400, { error: `"${f.label}" needs to be a web address, like linkedin.com/in/yourname.` });
+      }
+      if (!value && f.mode === "required") return send(res, 400, { error: `Please fill in ${f.label}.` });
+      answers[f.id] = value;
+    }
 
     let place;
     try {
@@ -325,12 +405,16 @@ async function handleApi(req, res, url) {
 
     const entry = await mutate((entries) => {
       const existing = clientId ? entries.find((e) => e.clientId === clientId) : null;
+      const { industry = existing?.industry, ...rest } = answers;
+      const extra = { ...existing?.extra, ...rest };
+      for (const key of Object.keys(extra)) if (!extra[key]) delete extra[key];
       const next = {
         id: existing?.id || crypto.randomUUID(),
         name,
         city: place.city,
         country: place.country,
         industry: industry || undefined,
+        extra: Object.keys(extra).length ? extra : undefined,
         lat: place.lat,
         lon: place.lon,
         createdAt: existing?.createdAt || new Date().toISOString(),
@@ -344,17 +428,28 @@ async function handleApi(req, res, url) {
       }
       return next;
     });
-    return send(res, 201, publicEntry(entry));
+    return send(res, 201, publicEntry(entry, active));
   }
 
-  if (url.pathname === "/api/admin/entries" && req.method === "GET") {
+  if (url.pathname.startsWith("/api/admin/")) {
     if (!ADMIN_KEY) return send(res, 503, { error: "ADMIN_KEY isn't set on the server." });
     if (!isAdmin(req)) {
       if (rateLimited(`admin:${clientIp(req)}`)) return send(res, 429, { error: "Too many attempts. Please wait a minute." });
       return send(res, 401, { error: "That admin key isn't right." });
     }
-    const entries = await store.load();
-    return send(res, 200, entries.map(publicEntry));
+    if (url.pathname === "/api/admin/entries" && req.method === "GET") {
+      const entries = await store.load();
+      return send(res, 200, entries.map((e) => publicEntry(e)));
+    }
+    if (url.pathname === "/api/admin/fields" && req.method === "GET") {
+      return send(res, 200, { fields: await getFields(), maxFields: MAX_FIELDS });
+    }
+    if (url.pathname === "/api/admin/fields" && req.method === "PUT") {
+      const fields = validateFields((await readJson(req)).fields);
+      await settingsStore.save({ fields });
+      fieldsCache = fields;
+      return send(res, 200, { fields, maxFields: MAX_FIELDS });
+    }
   }
 
   const match = url.pathname.match(/^\/api\/entries\/([\w-]+)$/);
@@ -374,8 +469,10 @@ async function handleApi(req, res, url) {
   return send(res, 404, { error: "Not found" });
 }
 
-function serveStatic(req, res, url) {
-  if (url.pathname === "/" || url.pathname === "/index.html") return sendHtml(req, res, 200, indexHtml);
+async function serveStatic(req, res, url) {
+  if (url.pathname === "/" || url.pathname === "/index.html") {
+    return sendHtml(req, res, 200, indexHtml.replace("{{CONFIG}}", jsonForHtml({ fields: await activeFields() })));
+  }
   if (url.pathname === "/admin") return sendHtml(req, res, 200, adminHtml);
   const filePath = path.normalize(path.join(PUBLIC_DIR, url.pathname));
   if (!filePath.startsWith(PUBLIC_DIR + path.sep)) return send(res, 404, "Not found");
@@ -402,14 +499,14 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname.startsWith("/api/")) return await handleApi(req, res, url);
     if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, "Method not allowed");
-    return serveStatic(req, res, url);
+    return await serveStatic(req, res, url);
   } catch (err) {
-    console.error(err);
+    if (!err.status) console.error(err);
     send(res, err.status || 500, { error: err.status ? err.message : "Something went wrong." });
   }
 });
 
 server.listen(PORT, () => {
-  console.log(`Group map running on http://localhost:${PORT} (storage: ${store === redisStore ? "Upstash Redis" : DATA_FILE})`);
+  console.log(`Group map running on http://localhost:${PORT} (storage: ${USE_REDIS ? "Upstash Redis" : DATA_FILE})`);
   console.log(SITE_PASSWORD ? "Site password is on." : "No SITE_PASSWORD set: anyone with the link can see the map.");
 });

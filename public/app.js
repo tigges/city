@@ -2,6 +2,7 @@
   const $ = (id) => document.getElementById(id);
   const STORAGE_KEY = "city-map:me";
   const COLORS = ["#4f46e5", "#ec4899", "#0ea5e9", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#14b8a6"];
+  const FIELDS = JSON.parse($("config").textContent).fields;
 
   const me = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null") || {};
   if (!me.clientId) {
@@ -62,6 +63,40 @@
       "Healthcare", "Hospitality", "Legal", "Manufacturing", "Marketing", "Non-profit", "Real Estate", "Retail",
       "Student", "Technology", "Transport & Logistics", "Retired"].map((value) => el("option", { value })),
   );
+
+  // ---------- configurable fields ----------
+  const extraInputs = new Map();
+  for (const f of FIELDS) {
+    const input = el("input", {
+      id: `field-${f.id}`,
+      type: f.type === "link" ? "url" : "text",
+      maxLength: f.type === "link" ? 300 : f.id === "industry" ? 60 : 100,
+      placeholder: f.id === "industry" ? "e.g. Finance, Tech, Healthcare" : f.type === "link" ? "e.g. linkedin.com/in/yourname" : "",
+      required: f.mode === "required",
+    });
+    if (f.id === "industry") {
+      input.setAttribute("list", "industries");
+      input.autocomplete = "organization-title";
+    }
+    if (f.type === "link") input.inputMode = "url";
+    const label = el("span", { textContent: f.label });
+    if (f.mode !== "required") label.append(el("em", { className: "optional", textContent: "optional" }));
+    $("extra-fields").append(el("label", { className: "field" }, label, input));
+    extraInputs.set(f.id, input);
+  }
+
+  function valueOf(e, f) {
+    return f.id === "industry" ? e.industry : e.extra?.[f.id];
+  }
+
+  function textDetails(e) {
+    return FIELDS.filter((f) => f.type !== "link").map((f) => valueOf(e, f)).filter(Boolean);
+  }
+
+  function links(e) {
+    return FIELDS.filter((f) => f.type === "link" && /^https?:\/\//i.test(valueOf(e, f) || ""))
+      .map((f) => el("a", { href: valueOf(e, f), target: "_blank", rel: "noopener noreferrer nofollow", textContent: f.label }));
+  }
 
   // ---------- map ----------
   const map = L.map("map", { worldCopyJump: true, zoomControl: false }).setView([25, 10], 2);
@@ -145,7 +180,11 @@
       });
       const popup = el("div", {},
         el("div", { className: "popup-place", textContent: `${first.city}, ${first.country}` }),
-        el("ul", { className: "popup-names" }, ...group.map((e) => el("li", { textContent: e.industry ? `${e.name} · ${e.industry}` : e.name }))),
+        el("ul", { className: "popup-names" }, ...group.map((e) => {
+          const li = el("li", { textContent: [e.name, ...textDetails(e)].join(" · ") });
+          for (const a of links(e)) li.append(" · ", a);
+          return li;
+        })),
       );
       marker.bindPopup(popup);
       marker.addTo(markerLayer);
@@ -176,7 +215,10 @@
         el("span", { className: "avatar", textContent: initials(e.name), style: `background:${colorFor(e.city)}` }),
         el("span", { className: "person-text" }, nameEl, el("span", {},
           `${e.city}, ${e.country}`,
-          ...(e.industry ? [" · ", el("span", { className: "industry-tag", textContent: e.industry })] : []),
+          ...FIELDS.filter((f) => f.type !== "link" && valueOf(e, f)).flatMap((f) => [
+            " · ",
+            el("span", { className: f.id === "industry" ? "industry-tag" : "", textContent: valueOf(e, f) }),
+          ]),
         )),
       );
       btn.addEventListener("click", () => focusEntry(e));
@@ -230,9 +272,8 @@
   // ---------- form ----------
   const form = $("entry-form");
   const fields = ["name", "city", "country"].map($);
-  const industry = $("industry");
-  const industryRequired = industry.dataset.required === "true";
-  const requiredFields = industryRequired ? [...fields, industry] : fields;
+  const requiredExtra = FIELDS.filter((f) => f.mode === "required").map((f) => extraInputs.get(f.id));
+  const requiredFields = [...fields, ...requiredExtra];
 
   function showError(message) {
     $("form-error").textContent = message;
@@ -249,7 +290,7 @@
       if (bad && !firstInvalid) firstInvalid = f;
     }
     if (firstInvalid) {
-      showError(industryRequired ? "Please fill in your name, city, country and industry." : "Please fill in your name, city and country.");
+      showError(requiredExtra.length ? "Please fill in all the fields that aren't marked optional." : "Please fill in your name, city and country.");
       firstInvalid.focus();
       return;
     }
@@ -261,7 +302,13 @@
       const res = await fetch("/api/entries", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: fields[0].value, city: fields[1].value, country: fields[2].value, industry: industry.value, clientId: me.clientId }),
+        body: JSON.stringify({
+          name: fields[0].value,
+          city: fields[1].value,
+          country: fields[2].value,
+          fields: Object.fromEntries([...extraInputs].map(([id, input]) => [id, input.value])),
+          clientId: me.clientId,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Something went wrong. Please try again.");
@@ -290,7 +337,7 @@
     fields[0].value = mine.name;
     fields[1].value = mine.city;
     fields[2].value = mine.country;
-    industry.value = mine.industry || "";
+    for (const f of FIELDS) extraInputs.get(f.id).value = valueOf(mine, f) || "";
     showError("");
     renderMe();
     fields[1].focus();

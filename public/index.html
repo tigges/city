@@ -56,11 +56,8 @@
             <input id="country" name="country" type="text" maxlength="60" list="countries" autocomplete="country-name" placeholder="Start typing…" required />
             <datalist id="countries"></datalist>
           </label>
-          <label class="field">
-            <span>Industry{{INDUSTRY_HINT}}</span>
-            <input id="industry" name="industry" type="text" maxlength="60" list="industries" autocomplete="organization-title" placeholder="e.g. Finance, Tech, Healthcare" data-required="{{INDUSTRY_REQUIRED}}" />
-            <datalist id="industries"></datalist>
-          </label>
+          <div id="extra-fields"></div>
+          <datalist id="industries"></datalist>
           <p id="form-error" class="form-error" role="alert" hidden></p>
           <button id="submit" class="btn-primary" type="submit">
             <span class="btn-label">Put me on the map</span>
@@ -101,6 +98,7 @@
 
     <div id="toast" class="toast" role="status" hidden></div>
 
+    <script id="config" type="application/json">{{CONFIG}}</script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="/app.js"></script>
   </body>
