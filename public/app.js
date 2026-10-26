@@ -11,7 +11,8 @@
 
   let entries = [];
   let editing = false;
-  let firstFit = true;
+  let fitPending = true;
+  let activeIndustry = null;
 
   function saveMe() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(me));
@@ -76,11 +77,53 @@
     return `${e.lat.toFixed(3)},${e.lon.toFixed(3)}`;
   }
 
+  // ---------- industry filter ----------
+  // Industry is free text, so "Media, Technology" counts towards both.
+  function industryTags(e) {
+    return (e.industry || "").split(/[,;/]/).map((t) => t.trim()).filter(Boolean);
+  }
+
+  function visibleEntries() {
+    if (!activeIndustry) return entries;
+    return entries.filter((e) => industryTags(e).some((t) => t.toLowerCase() === activeIndustry));
+  }
+
+  function setIndustry(key) {
+    activeIndustry = key;
+    fitPending = true;
+    render();
+  }
+
+  function renderFilters() {
+    const tags = new Map();
+    for (const e of entries) {
+      for (const t of new Set(industryTags(e).map((x) => x.toLowerCase()))) {
+        const label = industryTags(e).find((x) => x.toLowerCase() === t);
+        const tag = tags.get(t) || { label, count: 0 };
+        tag.count++;
+        tags.set(t, tag);
+      }
+    }
+    if (activeIndustry && !tags.has(activeIndustry)) activeIndustry = null;
+    const box = $("filters");
+    box.hidden = tags.size < 2;
+    if (box.hidden) return box.replaceChildren();
+    const chip = (key, label, count) => {
+      const b = el("button", { type: "button", className: "chip", textContent: label }, ...(count ? [el("small", { textContent: count })] : []));
+      b.setAttribute("aria-pressed", String(activeIndustry === key));
+      b.addEventListener("click", () => setIndustry(activeIndustry === key ? null : key));
+      return b;
+    };
+    const sorted = [...tags].sort((a, b) => b[1].count - a[1].count || a[1].label.localeCompare(b[1].label));
+    box.replaceChildren(chip(null, "Everyone"), ...sorted.map(([key, t]) => chip(key, t.label, t.count)));
+  }
+
   function renderMap() {
     markerLayer.clearLayers();
     markersByPlace.clear();
+    const shown = visibleEntries();
     const groups = new Map();
-    for (const e of entries) {
+    for (const e of shown) {
       const key = placeKey(e);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(e);
@@ -108,9 +151,9 @@
       marker.addTo(markerLayer);
       markersByPlace.set(key, marker);
     }
-    if (firstFit && entries.length) {
-      firstFit = false;
-      const bounds = L.latLngBounds(entries.map((e) => [e.lat, e.lon]));
+    if (fitPending && shown.length) {
+      fitPending = false;
+      const bounds = L.latLngBounds(shown.map((e) => [e.lat, e.lon]));
       map.fitBounds(bounds, { padding: [40, 40], maxZoom: 6 });
     }
   }
@@ -125,7 +168,7 @@
   function renderList() {
     const list = $("people-list");
     list.replaceChildren();
-    const sorted = [...entries].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const sorted = [...visibleEntries()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     for (const e of sorted) {
       const nameEl = el("strong", { textContent: e.name });
       if (e.id === me.entryId) nameEl.append(el("span", { className: "you-badge", textContent: "YOU" }));
@@ -162,6 +205,7 @@
   }
 
   function render() {
+    renderFilters();
     renderMap();
     renderList();
     renderMe();
@@ -225,6 +269,7 @@
       saveMe();
       entries = entries.filter((e) => e.id !== data.id).concat(data);
       editing = false;
+      activeIndustry = null;
       render();
       focusEntry(data);
       toast(`📍 Welcome, ${data.name}! You're on the map.`);
