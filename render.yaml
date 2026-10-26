@@ -12,8 +12,8 @@ services:
       - key: ADMIN_KEY
         generateValue: true
       # Render's free plan has no persistent disk, so use a free Upstash Redis database
-      # to keep entries across restarts. Paste the values from the Upstash console.
+      # to keep entries across restarts. Paste the REST token from the Upstash console when prompted.
       - key: UPSTASH_REDIS_REST_URL
-        sync: false
+        value: https://rare-bluejay-240203.upstash.io
       - key: UPSTASH_REDIS_REST_TOKEN
         sync: false
