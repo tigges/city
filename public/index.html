@@ -8,6 +8,12 @@
     <meta property="og:type" content="website" />
     <meta property="og:title" content="{{TITLE}}" />
     <meta property="og:description" content="Add yourself to the group map: name, city, country. Takes 10 seconds." />
+    <meta property="og:url" content="{{ORIGIN}}/" />
+    <meta property="og:image" content="{{ORIGIN}}/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="A map with pins showing where everyone in the group is" />
+    <meta name="twitter:card" content="summary_large_image" />
     <meta name="theme-color" content="#4f46e5" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -82,6 +88,7 @@
 
         <section class="people">
           <h2>Who's here</h2>
+          <div id="filters" class="filters" role="group" aria-label="Filter by industry" hidden></div>
           <ul id="people-list"></ul>
           <p id="empty" class="empty">No one yet. Be the first to drop a pin!</p>
         </section>
