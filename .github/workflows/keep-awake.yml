@@ -1,0 +1,18 @@
+# Pings the site so Render's free plan doesn't put it to sleep (it sleeps after 15 minutes without traffic).
+# GitHub runs scheduled jobs on a best-effort basis, so an uptime monitor (see README) is more reliable.
+# Set the repository variable SITE_URL to point this at a different deployment.
+name: Keep site awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - run: curl -fsS --max-time 90 --retry 2 "${SITE_URL}/healthz"
+        env:
+          SITE_URL: ${{ vars.SITE_URL || 'https://group-map.onrender.com' }}
