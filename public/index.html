@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{{TITLE}}</title>
+    <meta name="description" content="Add your name, city and country and see where everyone in the group is on a live map." />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="{{TITLE}}" />
+    <meta property="og:description" content="Add yourself to the group map: name, city, country. Takes 10 seconds." />
+    <meta name="theme-color" content="#4f46e5" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="panel">
+        <header class="brand">
+          <span class="brand-pin" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z"/></svg>
+          </span>
+          <div>
+            <h1>{{TITLE}}</h1>
+            <p class="subtitle">Drop your pin and see where the whole group is.</p>
+          </div>
+        </header>
+
+        <div class="stats" aria-live="polite">
+          <div class="stat"><strong id="stat-people">0</strong><span>people</span></div>
+          <div class="stat"><strong id="stat-cities">0</strong><span>cities</span></div>
+          <div class="stat"><strong id="stat-countries">0</strong><span>countries</span></div>
+        </div>
+
+        <form id="entry-form" class="card" novalidate>
+          <h2 id="form-title">Add yourself</h2>
+          <label class="field">
+            <span>Your name</span>
+            <input id="name" name="name" type="text" maxlength="40" autocomplete="given-name" placeholder="e.g. Maria" required />
+          </label>
+          <label class="field">
+            <span>City</span>
+            <input id="city" name="city" type="text" maxlength="80" autocomplete="address-level2" placeholder="e.g. Lisbon" required />
+          </label>
+          <label class="field">
+            <span>Country</span>
+            <input id="country" name="country" type="text" maxlength="60" list="countries" autocomplete="country-name" placeholder="Start typing…" required />
+            <datalist id="countries"></datalist>
+          </label>
+          <p id="form-error" class="form-error" role="alert" hidden></p>
+          <button id="submit" class="btn-primary" type="submit">
+            <span class="btn-label">Put me on the map</span>
+            <span class="spinner" aria-hidden="true"></span>
+          </button>
+          <div id="me-actions" class="me-actions" hidden>
+            <button type="button" id="cancel-edit" class="btn-link">Cancel</button>
+            <button type="button" id="remove-me" class="btn-link danger">Remove me from the map</button>
+          </div>
+        </form>
+
+        <div id="me-card" class="card me-card" hidden>
+          <div class="me-check" aria-hidden="true">✓</div>
+          <div class="me-text">
+            <strong>You're on the map!</strong>
+            <span id="me-summary"></span>
+          </div>
+          <button type="button" id="edit-me" class="btn-ghost">Edit</button>
+        </div>
+
+        <button type="button" id="share" class="btn-share">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 16.1c-.8 0-1.4.3-2 .8l-7.1-4.2c.1-.2.1-.5.1-.7s0-.5-.1-.7L16 7.2c.5.5 1.2.8 2 .8 1.7 0 3-1.3 3-3s-1.3-3-3-3-3 1.3-3 3c0 .2 0 .5.1.7L8 9.8C7.5 9.3 6.8 9 6 9c-1.7 0-3 1.3-3 3s1.3 3 3 3c.8 0 1.5-.3 2-.8l7.1 4.2c-.1.2-.1.4-.1.6 0 1.6 1.3 2.9 2.9 2.9s2.9-1.3 2.9-2.9-1.2-2.9-2.8-2.9Z"/></svg>
+          <span>Share link with the group</span>
+        </button>
+
+        <section class="people">
+          <h2>Who's here</h2>
+          <ul id="people-list"></ul>
+          <p id="empty" class="empty">No one yet. Be the first to drop a pin!</p>
+        </section>
+      </section>
+
+      <section class="map-wrap">
+        <div id="map" aria-label="Map of the group"></div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

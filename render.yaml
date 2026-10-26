@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: group-map
+    runtime: node
+    plan: free
+    buildCommand: "true"
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: APP_TITLE
+        value: Where is everyone?
+      - key: ADMIN_KEY
+        generateValue: true
+      # Render's free plan has no persistent disk, so use a free Upstash Redis database
+      # to keep entries across restarts. Paste the values from the Upstash console.
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
