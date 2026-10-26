@@ -38,13 +38,31 @@
       <section id="fields-card" class="card" hidden>
         <h2>Form fields</h2>
         <p class="hint top">Name, city and country are always asked. Choose what else people fill in.</p>
+        <h3 class="subhead">Popular fields</h3>
+        <ul id="preset-rows" class="preset-rows"></ul>
+        <h3 class="subhead">Your own fields</h3>
         <ul id="field-rows" class="field-rows"></ul>
+        <p id="no-custom" class="hint none">None yet. Add one if the list above is missing something.</p>
         <div class="field-actions">
           <button type="button" id="add-field" class="btn-ghost">+ Add a field</button>
           <button type="button" id="save-fields" class="btn-primary"><span class="btn-label">Save fields</span></button>
         </div>
         <p id="fields-error" class="form-error" role="alert" hidden></p>
         <p class="hint">Turning a field off hides it and its answers; turn it back on and the answers return. Open pages pick up changes when they're reloaded.</p>
+      </section>
+
+      <section id="backup-card" class="card" hidden>
+        <h2>Backup</h2>
+        <p class="hint top">Download everyone's entries and your field settings. Keep a copy somewhere safe.</p>
+        <div class="backup-actions">
+          <button type="button" id="download-json" class="btn-ghost">Download backup (.json)</button>
+          <button type="button" id="download-csv" class="btn-ghost">Download spreadsheet (.csv)</button>
+          <label class="btn-ghost danger file-btn">
+            Restore from backup…
+            <input type="file" id="restore-file" accept=".json,application/json" hidden />
+          </label>
+        </div>
+        <p class="hint">The .json file can be restored here later. The .csv opens in Excel or Google Sheets. Restoring replaces all current entries and field settings with the ones in the file.</p>
       </section>
 
       <section id="admin" class="card" hidden>
@@ -69,7 +87,7 @@
         const KEY = "city-map:admin-key";
         let entries = [];
         let fields = [];
-        let maxFields = 8;
+        let maxCustom = 8;
 
         function el(tag, props = {}, ...children) {
           const node = Object.assign(document.createElement(tag), props);
@@ -88,6 +106,7 @@
           sessionStorage.removeItem(KEY);
           $("admin").hidden = true;
           $("fields-card").hidden = true;
+          $("backup-card").hidden = true;
           $("key-form").hidden = false;
           $("key-error").textContent = error;
           $("key-error").hidden = !error;
@@ -106,11 +125,12 @@
           const [entriesRes, fieldsRes] = await Promise.all([api("/api/admin/entries"), api("/api/admin/fields")]);
           const data = await entriesRes.json().catch(() => ({}));
           if (!entriesRes.ok) return showLocked(data.error || "Something went wrong.");
-          ({ fields, maxFields } = await fieldsRes.json());
+          ({ fields, maxCustom } = await fieldsRes.json());
           entries = data.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
           $("key-form").hidden = true;
           $("admin").hidden = false;
           $("fields-card").hidden = false;
+          $("backup-card").hidden = false;
           renderFields();
           render();
         }
@@ -123,31 +143,45 @@
           return s;
         }
 
+        function presetRow(f) {
+          const on = el("input", { type: "checkbox", checked: f.mode !== "off", ariaLabel: `Ask for ${f.label}` });
+          const required = el("input", { type: "checkbox", checked: f.mode === "required", disabled: f.mode === "off" });
+          on.addEventListener("change", () => {
+            f.mode = on.checked ? (required.checked ? "required" : "optional") : "off";
+            required.disabled = !on.checked;
+          });
+          required.addEventListener("change", () => (f.mode = required.checked ? "required" : "optional"));
+          const detail = [f.type === "link" ? "Link" : "Text", f.id === "industry" ? "powers the filter" : ""].filter(Boolean).join(" · ");
+          return el("li", { className: "preset-row" },
+            el("label", { className: "switch" }, on, el("span", { className: "slider" })),
+            el("div", { className: "preset-text" }, el("strong", { textContent: f.label }), el("span", { textContent: detail })),
+            el("label", { className: "req" }, required, " Required"),
+          );
+        }
+
+        function customRow(f) {
+          const label = el("input", { className: "field-label", value: f.label, maxLength: 40, ariaLabel: "Field name", placeholder: "Field name, e.g. Favourite café" });
+          label.addEventListener("input", () => (f.label = label.value));
+          const type = select([["text", "Text"], ["link", "Web link"]], f.type, "Type");
+          type.addEventListener("change", () => (f.type = type.value));
+          const mode = select([["off", "Off"], ["optional", "Optional"], ["required", "Required"]], f.mode, "Setting");
+          mode.addEventListener("change", () => (f.mode = mode.value));
+          const remove = el("button", { type: "button", className: "btn-ghost danger", textContent: "Remove" });
+          remove.addEventListener("click", () => {
+            if (!f.new && !confirm(`Remove "${f.label}"? Answers people already gave are kept but no longer shown.`)) return;
+            fields.splice(fields.indexOf(f), 1);
+            renderFields();
+          });
+          return el("li", { className: "field-row" }, label, type, mode, remove);
+        }
+
         function renderFields() {
-          $("field-rows").replaceChildren(...fields.map((f, i) => {
-            const label = el("input", { className: "field-label", value: f.label, maxLength: 40, ariaLabel: "Field name", placeholder: "Field name, e.g. LinkedIn" });
-            label.addEventListener("input", () => (f.label = label.value));
-            const type = select([["text", "Text"], ["link", "Web link"]], f.type, "Type");
-            type.disabled = f.id === "industry";
-            type.addEventListener("change", () => (f.type = type.value));
-            const mode = select([["off", "Off"], ["optional", "Optional"], ["required", "Required"]], f.mode, "Setting");
-            mode.addEventListener("change", () => (f.mode = mode.value));
-            const row = el("li", { className: "field-row" }, label, type, mode);
-            if (f.id === "industry") {
-              row.append(el("span", { className: "field-fixed", title: "Industry powers the filter, so it can be turned off but not removed", textContent: "Built in" }));
-            } else {
-              const remove = el("button", { type: "button", className: "btn-ghost danger", textContent: "Remove" });
-              remove.addEventListener("click", () => {
-                if (!f.new && !confirm(`Remove "${f.label}"? Answers people already gave are kept but no longer shown.`)) return;
-                fields.splice(i, 1);
-                renderFields();
-              });
-              row.append(remove);
-            }
-            return row;
-          }));
-          $("add-field").disabled = fields.length >= maxFields;
-          $("add-field").title = fields.length >= maxFields ? `Up to ${maxFields} fields` : "";
+          const custom = fields.filter((f) => !f.preset);
+          $("preset-rows").replaceChildren(...fields.filter((f) => f.preset).map(presetRow));
+          $("field-rows").replaceChildren(...custom.map(customRow));
+          $("no-custom").hidden = custom.length > 0;
+          $("add-field").disabled = custom.length >= maxCustom;
+          $("add-field").title = custom.length >= maxCustom ? `Up to ${maxCustom} of your own fields` : "";
         }
 
         function newId(label) {
@@ -163,12 +197,14 @@
 
         $("save-fields").addEventListener("click", async () => {
           $("fields-error").hidden = true;
-          if (fields.some((f) => !f.label.trim())) {
+          if (fields.some((f) => !f.preset && !f.label.trim())) {
             $("fields-error").textContent = "Every field needs a name.";
             $("fields-error").hidden = false;
             return;
           }
-          const payload = fields.map((f) => ({ id: f.id || newId(f.label), label: f.label.trim(), type: f.type, mode: f.mode }));
+          const payload = fields.map((f) =>
+            f.preset ? { id: f.id, mode: f.mode } : { id: f.id || newId(f.label), label: f.label.trim(), type: f.type, mode: f.mode },
+          );
           const res = await api("/api/admin/fields", { method: "PUT", body: JSON.stringify({ fields: payload }) });
           const data = await res.json().catch(() => ({}));
           if (res.status === 401) return showLocked("Please enter the admin key again.");
@@ -183,9 +219,64 @@
           toast("Fields saved.");
         });
 
+        // ---------- backup ----------
+        function download(name, blob) {
+          const a = el("a", { href: URL.createObjectURL(blob), download: name });
+          document.body.append(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        }
+
+        const today = () => new Date().toISOString().slice(0, 10);
+
+        $("download-json").addEventListener("click", async () => {
+          const res = await api("/api/admin/backup");
+          if (res.status === 401) return showLocked("Please enter the admin key again.");
+          if (!res.ok) return toast("Couldn't download the backup. Please try again.");
+          download(`group-map-backup-${today()}.json`, await res.blob());
+        });
+
+        $("download-csv").addEventListener("click", () => {
+          // Leading = + - @ would make spreadsheets run the cell as a formula.
+          const cell = (v) => {
+            const s = String(v ?? "");
+            return `"${(/^[=+\-@\t\r]/.test(s) ? `'${s}` : s).replace(/"/g, '""')}"`;
+          };
+          const cols = fields.filter((f) => f.mode !== "off" || entries.some((e) => valueOf(e, f)));
+          const header = ["Name", "City", "Country", ...cols.map((f) => f.label), "Latitude", "Longitude", "Added", "Updated"];
+          const rows = entries.map((e) => [e.name, e.city, e.country, ...cols.map((f) => valueOf(e, f)), e.lat, e.lon, e.createdAt, e.updatedAt]);
+          const csv = [header, ...rows].map((r) => r.map(cell).join(",")).join("\r\n");
+          download(`group-map-${today()}.csv`, new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
+        });
+
+        $("restore-file").addEventListener("change", async (ev) => {
+          const file = ev.target.files[0];
+          ev.target.value = "";
+          if (!file) return;
+          let backup;
+          try {
+            backup = JSON.parse(await file.text());
+          } catch {
+            return toast("That file isn't a group map backup.");
+          }
+          if (backup?.app !== "group-map" || !Array.isArray(backup.entries)) return toast("That file isn't a group map backup.");
+          const when = backup.exportedAt ? ` from ${new Date(backup.exportedAt).toLocaleString()}` : "";
+          if (!confirm(`Replace all ${entries.length} current entries with the ${backup.entries.length} in this backup${when}? This can't be undone, so download a backup of the current data first if you might need it.`)) return;
+          const res = await api("/api/admin/restore", { method: "POST", body: JSON.stringify(backup) });
+          const data = await res.json().catch(() => ({}));
+          if (res.status === 401) return showLocked("Please enter the admin key again.");
+          if (!res.ok) return toast(data.error || "Couldn't restore. Please try again.");
+          await load(sessionStorage.getItem(KEY));
+          toast(`Restored ${data.restored} ${data.restored === 1 ? "entry" : "entries"}${data.skipped ? ` (${data.skipped} skipped)` : ""}.`);
+        });
+
+        function valueOf(e, f) {
+          return f.id === "industry" ? e.industry : e.extra?.[f.id];
+        }
+
         function render() {
           const q = $("search").value.trim().toLowerCase();
-          const valueOf = (e, f) => (f.id === "industry" ? e.industry : e.extra?.[f.id]);
           const answers = (e) => fields.filter((f) => valueOf(e, f)).map((f) => `${f.label}: ${valueOf(e, f)}${f.mode === "off" ? " (hidden)" : ""}`);
           const shown = entries.filter((e) => !q || [e.name, e.city, e.country, ...answers(e)].join(" ").toLowerCase().includes(q));
           $("count").textContent = `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`;
