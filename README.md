@@ -65,17 +65,24 @@ docker run -p 3000:3000 -v group-map-data:/data group-map
 | `DATA_DIR` | `./data` | Folder for `entries.json` when Upstash isn't configured |
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | – | Store entries in Upstash Redis instead of a file |
 | `SITE_PASSWORD` | – | If set, visitors must enter this password once (remembered for a year on their device) |
-| `INDUSTRY_REQUIRED` | `false` | Set to `true` to make the Industry field mandatory |
-| `ADMIN_KEY` | – | Unlocks the `/admin` page for deleting entries (for spam) |
+| `INDUSTRY_REQUIRED` | `false` | Starting setting for Industry; once fields are saved in `/admin`, that wins |
+| `ADMIN_KEY` | – | Unlocks the `/admin` page (form fields and deleting entries) |
 | `PUBLIC_URL` | Render's URL | Public address used for the link preview image; set it if you use a custom domain |
 
 Name, city and country are always required, because the pin can't be placed without them. Changing
 `SITE_PASSWORD` logs everyone out, and they'll be asked for the new password.
 
-### Removing entries
+### Admin page
 
-Open `https://your-app/admin`, enter the `ADMIN_KEY` (Render shows it under **Environment**), and use
-**Delete** next to any entry. From the command line:
+Open `https://your-app/admin` and enter the `ADMIN_KEY` (Render shows it under **Environment**).
+
+**Form fields:** name, city and country are always asked. Industry and up to seven fields you add can each
+be **Off**, **Optional** or **Required**, and renamed. A field can be plain text or a **web link** (for
+example LinkedIn), which shows as a clickable link in the map popup. Turning a field off hides it and
+its answers without deleting them. The settings are stored next to the entries (Upstash key
+`city-map:entries:settings`, or `data/settings.json`).
+
+**Removing entries:** use **Delete** next to any entry. From the command line:
 
 ```bash
 curl -X DELETE https://your-app/api/entries/<id> -H "x-admin-key: $ADMIN_KEY"
