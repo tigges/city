@@ -35,6 +35,18 @@
         <p class="hint">It's the <code>ADMIN_KEY</code> value under Environment in the Render dashboard.</p>
       </form>
 
+      <section id="fields-card" class="card" hidden>
+        <h2>Form fields</h2>
+        <p class="hint top">Name, city and country are always asked. Choose what else people fill in.</p>
+        <ul id="field-rows" class="field-rows"></ul>
+        <div class="field-actions">
+          <button type="button" id="add-field" class="btn-ghost">+ Add a field</button>
+          <button type="button" id="save-fields" class="btn-primary"><span class="btn-label">Save fields</span></button>
+        </div>
+        <p id="fields-error" class="form-error" role="alert" hidden></p>
+        <p class="hint">Turning a field off hides it and its answers; turn it back on and the answers return. Open pages pick up changes when they're reloaded.</p>
+      </section>
+
       <section id="admin" class="card" hidden>
         <div class="admin-head">
           <h2 id="count">Entries</h2>
@@ -42,7 +54,7 @@
         </div>
         <label class="field">
           <span>Search</span>
-          <input id="search" type="search" placeholder="Name, city, country or industry" autocomplete="off" />
+              <input id="search" type="search" placeholder="Search names, places and answers" autocomplete="off" />
         </label>
         <ul id="rows" class="admin-rows"></ul>
         <p id="none" class="empty" hidden>No entries.</p>
@@ -56,6 +68,8 @@
         const $ = (id) => document.getElementById(id);
         const KEY = "city-map:admin-key";
         let entries = [];
+        let fields = [];
+        let maxFields = 8;
 
         function el(tag, props = {}, ...children) {
           const node = Object.assign(document.createElement(tag), props);
@@ -73,25 +87,107 @@
         function showLocked(error = "") {
           sessionStorage.removeItem(KEY);
           $("admin").hidden = true;
+          $("fields-card").hidden = true;
           $("key-form").hidden = false;
           $("key-error").textContent = error;
           $("key-error").hidden = !error;
         }
 
+        function api(path, options = {}) {
+          return fetch(path, {
+            ...options,
+            cache: "no-store",
+            headers: { "x-admin-key": sessionStorage.getItem(KEY) || "", "Content-Type": "application/json" },
+          });
+        }
+
         async function load(key) {
-          const res = await fetch("/api/admin/entries", { headers: { "x-admin-key": key }, cache: "no-store" });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) return showLocked(data.error || "Something went wrong.");
           sessionStorage.setItem(KEY, key);
+          const [entriesRes, fieldsRes] = await Promise.all([api("/api/admin/entries"), api("/api/admin/fields")]);
+          const data = await entriesRes.json().catch(() => ({}));
+          if (!entriesRes.ok) return showLocked(data.error || "Something went wrong.");
+          ({ fields, maxFields } = await fieldsRes.json());
           entries = data.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
           $("key-form").hidden = true;
           $("admin").hidden = false;
+          $("fields-card").hidden = false;
+          renderFields();
           render();
         }
 
+        // ---------- form fields ----------
+        function select(options, value, label) {
+          const s = el("select", { className: "field-select", ariaLabel: label });
+          for (const [v, text] of options) s.append(el("option", { value: v, textContent: text }));
+          s.value = value;
+          return s;
+        }
+
+        function renderFields() {
+          $("field-rows").replaceChildren(...fields.map((f, i) => {
+            const label = el("input", { className: "field-label", value: f.label, maxLength: 40, ariaLabel: "Field name", placeholder: "Field name, e.g. LinkedIn" });
+            label.addEventListener("input", () => (f.label = label.value));
+            const type = select([["text", "Text"], ["link", "Web link"]], f.type, "Type");
+            type.disabled = f.id === "industry";
+            type.addEventListener("change", () => (f.type = type.value));
+            const mode = select([["off", "Off"], ["optional", "Optional"], ["required", "Required"]], f.mode, "Setting");
+            mode.addEventListener("change", () => (f.mode = mode.value));
+            const row = el("li", { className: "field-row" }, label, type, mode);
+            if (f.id === "industry") {
+              row.append(el("span", { className: "field-fixed", title: "Industry powers the filter, so it can be turned off but not removed", textContent: "Built in" }));
+            } else {
+              const remove = el("button", { type: "button", className: "btn-ghost danger", textContent: "Remove" });
+              remove.addEventListener("click", () => {
+                if (!f.new && !confirm(`Remove "${f.label}"? Answers people already gave are kept but no longer shown.`)) return;
+                fields.splice(i, 1);
+                renderFields();
+              });
+              row.append(remove);
+            }
+            return row;
+          }));
+          $("add-field").disabled = fields.length >= maxFields;
+          $("add-field").title = fields.length >= maxFields ? `Up to ${maxFields} fields` : "";
+        }
+
+        function newId(label) {
+          const slug = label.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30) || "field";
+          return `${slug}-${Math.random().toString(36).slice(2, 6)}`;
+        }
+
+        $("add-field").addEventListener("click", () => {
+          fields.push({ id: "", label: "", type: "text", mode: "optional", new: true });
+          renderFields();
+          [...document.querySelectorAll(".field-label")].pop().focus();
+        });
+
+        $("save-fields").addEventListener("click", async () => {
+          $("fields-error").hidden = true;
+          if (fields.some((f) => !f.label.trim())) {
+            $("fields-error").textContent = "Every field needs a name.";
+            $("fields-error").hidden = false;
+            return;
+          }
+          const payload = fields.map((f) => ({ id: f.id || newId(f.label), label: f.label.trim(), type: f.type, mode: f.mode }));
+          const res = await api("/api/admin/fields", { method: "PUT", body: JSON.stringify({ fields: payload }) });
+          const data = await res.json().catch(() => ({}));
+          if (res.status === 401) return showLocked("Please enter the admin key again.");
+          if (!res.ok) {
+            $("fields-error").textContent = data.error || "Couldn't save. Please try again.";
+            $("fields-error").hidden = false;
+            return;
+          }
+          fields = data.fields;
+          renderFields();
+          render();
+          toast("Fields saved.");
+        });
+
         function render() {
           const q = $("search").value.trim().toLowerCase();
-          const shown = entries.filter((e) => !q || [e.name, e.city, e.country, e.industry].join(" ").toLowerCase().includes(q));
+          const valueOf = (e, f) => (f.id === "industry" ? e.industry : e.extra?.[f.id]);
+          const answers = (e) => fields.filter((f) => valueOf(e, f)).map((f) => `${f.label}: ${valueOf(e, f)}${f.mode === "off" ? " (hidden)" : ""}`);
+          const shown = entries.filter((e) => !q || [e.name, e.city, e.country, ...answers(e)].join(" ").toLowerCase().includes(q));
           $("count").textContent = `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`;
           $("rows").replaceChildren(...shown.map((e) => {
             const del = el("button", { type: "button", className: "btn-ghost danger", textContent: "Delete" });
@@ -99,7 +195,8 @@
             return el("li", { className: "admin-row" },
               el("div", { className: "person-text" },
                 el("strong", { textContent: e.name }),
-                el("span", { textContent: [`${e.city}, ${e.country}`, e.industry].filter(Boolean).join(" · ") }),
+                el("span", { textContent: `${e.city}, ${e.country}` }),
+                ...answers(e).map((text) => el("span", { className: "answer", textContent: text })),
                 el("span", { className: "muted-small", textContent: `Added ${new Date(e.createdAt).toLocaleString()}` }),
               ),
               del,
