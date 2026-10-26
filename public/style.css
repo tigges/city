@@ -260,6 +260,22 @@ h1 { font-size: 1.4rem; font-weight: 800; }
 .popup-place { font-weight: 700; margin-bottom: 4px; }
 .popup-names { margin: 0; padding-left: 18px; color: #374151; }
 
+/* ---------- login ---------- */
+.login-wrap {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+  background: radial-gradient(circle at 20% 10%, #e0e7ff, transparent 50%), radial-gradient(circle at 80% 90%, #fce7f3, transparent 50%);
+}
+.login-card { width: 100%; max-width: 380px; padding: 28px 24px; text-align: center; }
+.login-card .brand-pin { margin: 0 auto 14px; }
+.login-card .subtitle { margin: 6px 0 20px; }
+.login-card .field { text-align: left; }
+
+.optional { font-style: normal; font-weight: 500; color: var(--muted); margin-left: 4px; }
+.industry-tag { color: var(--primary); font-weight: 500; }
+
 /* ---------- toast ---------- */
 .toast {
   position: fixed;

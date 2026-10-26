@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{{TITLE}}</title>
+    <meta name="robots" content="noindex" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="{{TITLE}}" />
+    <meta property="og:description" content="Add yourself to the group map: name, city, country. Takes 10 seconds." />
+    <meta name="theme-color" content="#4f46e5" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body class="login-page">
+    <main class="login-wrap">
+      <form class="card login-card" method="post" action="/login">
+        <span class="brand-pin" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z"/></svg>
+        </span>
+        <h1>{{TITLE}}</h1>
+        <p class="subtitle">Enter the group password to see the map.</p>
+        <label class="field">
+          <span>Password</span>
+          <input name="password" type="password" autocomplete="current-password" required autofocus />
+        </label>
+        {{ERROR}}
+        <button class="btn-primary" type="submit"><span class="btn-label">Enter</span></button>
+      </form>
+    </main>
+  </body>
+</html>

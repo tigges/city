@@ -1,7 +1,8 @@
 # Where is everyone? 🌍
 
-A tiny, shareable group map. Everyone who opens the link enters their **name, city and country**, and
-the whole group shows up as pins on a live map. It's built for dropping the URL into a WhatsApp group.
+A tiny, shareable group map. Everyone who opens the link enters their **name, city, country** and
+(optionally) **industry**, and the whole group shows up as pins on a live map. It's built for dropping
+the URL into a WhatsApp group, optionally behind a shared password.
 
 - Mobile-first, works well inside WhatsApp's in-app browser
 - Cities are looked up automatically with OpenStreetMap, so nobody needs to know coordinates
@@ -49,7 +50,12 @@ docker run -p 3000:3000 -v group-map-data:/data group-map
 | `APP_TITLE` | `Where is everyone?` | Page heading and WhatsApp link preview title |
 | `DATA_DIR` | `./data` | Folder for `entries.json` when Upstash isn't configured |
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | – | Store entries in Upstash Redis instead of a file |
+| `SITE_PASSWORD` | – | If set, visitors must enter this password once (remembered for a year on their device) |
+| `INDUSTRY_REQUIRED` | `false` | Set to `true` to make the Industry field mandatory |
 | `ADMIN_KEY` | – | Lets you delete any entry (for spam) |
+
+Name, city and country are always required, because the pin can't be placed without them. Changing
+`SITE_PASSWORD` logs everyone out, and they'll be asked for the new password.
 
 To remove someone else's entry as the admin:
 
