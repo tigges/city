@@ -301,7 +301,8 @@ h1 { font-size: 1.4rem; font-weight: 800; }
 .field-label { flex: 1 1 180px; min-width: 0; }
 .field-label:focus, .field-select:focus { outline: none; border-color: var(--primary); background: #fff; box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.15); }
 .field-select[disabled] { opacity: 0.6; }
-.field-fixed { color: var(--muted); font-size: 0.8rem; padding: 0 6px; }
+.field-fixed, .field-row .btn-ghost { width: 84px; text-align: center; }
+.field-fixed { color: var(--muted); font-size: 0.8rem; }
 .field-actions { display: flex; gap: 8px; align-items: center; }
 .field-actions .btn-primary { flex: 1; }
 .btn-ghost[disabled] { opacity: 0.5; cursor: not-allowed; }
