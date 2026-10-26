@@ -1,0 +1,14 @@
+{
+  "name": "city",
+  "version": "1.0.0",
+  "description": "Where is everyone? A tiny shareable group map: enter your name, city and country and see the whole group on a map.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
