@@ -7,6 +7,8 @@ the URL into a WhatsApp group, optionally behind a shared password.
 - Mobile-first, works well inside WhatsApp's in-app browser
 - Cities are looked up automatically with OpenStreetMap, so nobody needs to know coordinates
 - People in the same city share one pin that shows a count, and tapping it lists their names
+- When zoomed out, nearby cities merge into one numbered bubble; tapping it zooms in until they split
+- Once there are 6 or more people, the list gets a search box and a "By country" view
 - Each person can edit or remove their own pin (remembered on their phone), and resubmitting updates their pin instead of adding a duplicate
 - "Edit from another phone" gives people a personal link, so they can edit from Safari as well as WhatsApp's built-in browser. If someone adds the same name in the same city from a new browser, they're asked "Is that you?" instead of creating a duplicate
 - If a city name exists several times in a country (Springfield, Portland), people pick the right one from a short list
@@ -68,7 +70,7 @@ docker run -p 3000:3000 -v group-map-data:/data group-map
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | – | Store entries in Upstash Redis instead of a file |
 | `SITE_PASSWORD` | – | If set, visitors must enter this password once (remembered for a year on their device) |
 | `INDUSTRY_REQUIRED` | `false` | Starting setting for Industry; once fields are saved in `/admin`, that wins |
-| `ADMIN_KEY` | – | Unlocks the `/admin` page (form fields and deleting entries) |
+| `ADMIN_KEY` | – | Unlocks the `/admin` page (form fields, backups, editing, merging and deleting entries) |
 | `PUBLIC_URL` | Render's URL | Public address used for the link preview image; set it if you use a custom domain |
 
 Name, city and country are always required, because the pin can't be placed without them. Changing
@@ -89,6 +91,15 @@ settings are stored next to the entries (Upstash key `city-map:entries:settings`
 puts a file like that back, replacing what's there now. **Download spreadsheet (.csv)** is for opening
 in Excel or Google Sheets. Free Upstash databases can be deleted after long inactivity, so download a
 backup now and then.
+
+**Editing entries:** **Edit** next to an entry lets you fix the name, place or answers, e.g. a typo or
+someone who moved. The pin only moves when the city or country changes. Required fields can be left
+empty here.
+
+**Duplicates:** entries with the same name (ignoring capitals and accents) get a **Possible duplicate**
+tag. Use **Merge** on the one to remove, then **Keep this one** on the one to keep. The kept entry's
+details win, empty answers are filled in from the other one, and both people's browsers can edit the
+result.
 
 **Removing entries:** use **Delete** next to any entry. From the command line:
 
