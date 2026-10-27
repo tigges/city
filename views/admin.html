@@ -72,8 +72,14 @@
         </div>
         <label class="field">
           <span>Search</span>
-              <input id="search" type="search" placeholder="Search names, places and answers" autocomplete="off" />
+          <input id="search" type="search" placeholder="Search names, places and answers" autocomplete="off" />
         </label>
+        <p id="dupes" class="hint dupes" hidden></p>
+        <div id="merge-banner" class="form-choice merge-banner" hidden>
+          <p id="merge-text"></p>
+          <p class="hint">The entry you keep stays as it is. Empty answers are filled in from the other one, and anyone who could edit either entry can edit the result.</p>
+          <button type="button" id="cancel-merge" class="btn-ghost">Cancel</button>
+        </div>
         <ul id="rows" class="admin-rows"></ul>
         <p id="none" class="empty" hidden>No entries.</p>
       </section>
@@ -275,26 +281,141 @@
           return f.id === "industry" ? e.industry : e.extra?.[f.id];
         }
 
+        // ---------- entries: edit, merge, delete ----------
+        let editing = null; // { id, name, city, country, fields: {}, options, place, error }
+        let merging = null; // the entry that will be merged away
+
+        const fold = (s) => s.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+        const placeOf = (e) => [e.city, e.region, e.country].filter(Boolean).join(", ");
+
+        function button(text, onClick, className = "btn-ghost") {
+          const b = el("button", { type: "button", className, textContent: text });
+          b.addEventListener("click", onClick);
+          return b;
+        }
+
+        function editInput(label, value, onInput, note = "") {
+          const input = el("input", { value: value || "", maxLength: 300 });
+          input.addEventListener("input", () => onInput(input.value));
+          const span = el("span", { textContent: label });
+          if (note) span.append(el("em", { className: "optional", textContent: note }));
+          return el("label", { className: "field" }, span, input);
+        }
+
+        function editForm(e) {
+          const d = editing;
+          const shownFields = fields.filter((f) => f.mode !== "off" || valueOf(e, f));
+          const form = el("form", { className: "admin-edit" },
+            editInput("Name", d.name, (v) => (d.name = v)),
+            editInput("City", d.city, (v) => { d.city = v; d.options = null; d.place = null; }),
+            editInput("Country", d.country, (v) => { d.country = v; d.options = null; d.place = null; }),
+            ...shownFields.map((f) => editInput(f.label, d.fields[f.id], (v) => (d.fields[f.id] = v), f.mode === "off" ? "hidden" : "")),
+          );
+          if (d.options) {
+            const choice = select(d.options.map((o, i) => [String(i), o.label]), "", "Which place?");
+            choice.prepend(el("option", { value: "", textContent: "Pick one…", disabled: true }));
+            choice.value = d.place ? String(d.options.indexOf(d.place)) : "";
+            choice.addEventListener("change", () => (d.place = d.options[Number(choice.value)]));
+            form.append(el("label", { className: "field" }, el("span", { textContent: `There's more than one ${d.city}. Which one?` }), choice));
+          }
+          if (d.error) form.append(el("p", { className: "form-error", role: "alert", textContent: d.error }));
+          const save = el("button", { type: "submit", className: "btn-primary" }, el("span", { className: "btn-label", textContent: "Save" }));
+          form.append(el("div", { className: "field-actions" }, button("Cancel", () => { editing = null; render(); }), save));
+          form.addEventListener("submit", (ev) => {
+            ev.preventDefault();
+            saveEdit(e, save);
+          });
+          return form;
+        }
+
+        async function saveEdit(e, btn) {
+          const d = editing;
+          if (d.options && !d.place) {
+            d.error = "Pick which place you mean.";
+            return render();
+          }
+          btn.disabled = true;
+          const res = await api(`/api/admin/entries/${e.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ name: d.name, city: d.city, country: d.country, fields: d.fields, place: d.place && { lat: d.place.lat, lon: d.place.lon } }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.status === 401) return showLocked("Please enter the admin key again.");
+          if (res.status === 409 && data.code === "choose_place") {
+            Object.assign(d, { options: data.options, place: null, error: "" });
+            return render();
+          }
+          if (!res.ok) {
+            d.error = data.error || "Couldn't save. Please try again.";
+            return render();
+          }
+          entries = entries.map((x) => (x.id === data.id ? data : x));
+          editing = null;
+          render();
+          toast(`${data.name} was updated.`);
+        }
+
+        function startEdit(e) {
+          merging = null;
+          editing = { id: e.id, name: e.name, city: e.city, country: e.country, fields: Object.fromEntries(fields.map((f) => [f.id, valueOf(e, f) || ""])) };
+          render();
+        }
+
+        async function mergeInto(keep) {
+          const drop = merging;
+          if (!confirm(`Merge ${drop.name} (${placeOf(drop)}) into ${keep.name} (${placeOf(keep)})?\n\n${keep.name}'s details are kept, empty answers are filled in from the other entry, and the other entry is removed.`)) return;
+          const res = await api("/api/admin/merge", { method: "POST", body: JSON.stringify({ keep: keep.id, remove: drop.id }) });
+          const data = await res.json().catch(() => ({}));
+          if (res.status === 401) return showLocked("Please enter the admin key again.");
+          if (!res.ok) return toast(data.error || "Couldn't merge. Please try again.");
+          entries = entries.filter((x) => x.id !== drop.id).map((x) => (x.id === data.id ? data : x));
+          merging = null;
+          render();
+          toast("Merged. Both people's browsers can edit the remaining entry.");
+        }
+
         function render() {
-          const q = $("search").value.trim().toLowerCase();
+          const q = fold($("search").value);
           const answers = (e) => fields.filter((f) => valueOf(e, f)).map((f) => `${f.label}: ${valueOf(e, f)}${f.mode === "off" ? " (hidden)" : ""}`);
-          const shown = entries.filter((e) => !q || [e.name, e.city, e.country, ...answers(e)].join(" ").toLowerCase().includes(q));
+          const nameCounts = new Map();
+          for (const e of entries) nameCounts.set(fold(e.name), (nameCounts.get(fold(e.name)) || 0) + 1);
+          const dupes = (e) => nameCounts.get(fold(e.name)) > 1;
+          let shown = entries.filter((e) => !q || fold([e.name, e.city, e.country, ...answers(e)].join(" ")).includes(q));
+          // While merging, entries with the same name come first since they're the likely match.
+          if (merging) shown = [...shown].sort((a, b) => (fold(b.name) === fold(merging.name)) - (fold(a.name) === fold(merging.name)));
+          const dupeCount = new Set(entries.filter(dupes).map((e) => fold(e.name))).size;
           $("count").textContent = `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`;
+          $("dupes").hidden = !dupeCount || !!merging;
+          $("dupes").textContent = dupeCount === 1
+            ? "One name appears more than once. If it's the same person, use Merge."
+            : `${dupeCount} names appear more than once. If they're the same people, use Merge.`;
+          $("merge-banner").hidden = !merging;
+          if (merging) $("merge-text").textContent = `Merging ${merging.name} (${placeOf(merging)}). Pick the entry to keep.`;
           $("rows").replaceChildren(...shown.map((e) => {
-            const del = el("button", { type: "button", className: "btn-ghost danger", textContent: "Delete" });
-            del.addEventListener("click", () => remove(e));
-            return el("li", { className: "admin-row" },
+            if (editing?.id === e.id) return el("li", { className: "admin-row editing" }, editForm(e));
+            const nameEl = el("strong", { textContent: e.name });
+            if (dupes(e)) nameEl.append(el("span", { className: "dup-tag", textContent: "Possible duplicate" }));
+            let actions;
+            if (merging?.id === e.id) actions = [el("span", { className: "muted-small", textContent: "Merging this one" })];
+            else if (merging) actions = [button("Keep this one", () => mergeInto(e), "btn-ghost primary")];
+            else actions = [button("Edit", () => startEdit(e)), button("Merge", () => { editing = null; merging = e; render(); window.scrollTo({ top: $("admin").offsetTop, behavior: "smooth" }); }), button("Delete", () => remove(e), "btn-ghost danger")];
+            return el("li", { className: merging?.id === e.id ? "admin-row merging" : "admin-row" },
               el("div", { className: "person-text" },
-                el("strong", { textContent: e.name }),
-                el("span", { textContent: `${e.city}, ${e.country}` }),
+                nameEl,
+                el("span", { textContent: placeOf(e) }),
                 ...answers(e).map((text) => el("span", { className: "answer", textContent: text })),
                 el("span", { className: "muted-small", textContent: `Added ${new Date(e.createdAt).toLocaleString()}` }),
               ),
-              del,
+              el("div", { className: "row-actions" }, ...actions),
             );
           }));
           $("none").hidden = shown.length > 0;
         }
+
+        $("cancel-merge").addEventListener("click", () => {
+          merging = null;
+          render();
+        });
 
         async function remove(e) {
           if (!confirm(`Delete ${e.name} (${e.city}, ${e.country}) from the map?`)) return;
@@ -302,6 +423,7 @@
           if (res.status === 401) return showLocked("Please enter the admin key again.");
           if (!res.ok && res.status !== 404) return toast("Couldn't delete that entry. Please try again.");
           entries = entries.filter((x) => x.id !== e.id);
+          if (editing?.id === e.id) editing = null;
           render();
           toast(`${e.name} was removed.`);
         }

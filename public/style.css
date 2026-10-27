@@ -240,6 +240,36 @@ h1 { font-size: 1.4rem; font-weight: 800; }
   vertical-align: middle;
 }
 .empty { color: var(--muted); font-size: 0.92rem; margin: 0; }
+.list-tools { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.list-tools input {
+  flex: 1 1 180px;
+  min-width: 0;
+  font: inherit;
+  font-size: 16px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+}
+.list-tools input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.15); }
+.segmented { display: flex; padding: 3px; border-radius: 10px; background: #eceef5; }
+.segmented button { border: 0; background: none; border-radius: 8px; padding: 6px 10px; font-size: 0.82rem; font-weight: 600; color: var(--muted); }
+.segmented button[aria-pressed="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(17, 24, 39, 0.12); }
+#people-list .country-head {
+  display: flex;
+  justify-content: space-between;
+  margin: 8px 10px 0;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+#people-list .country-head:first-child { margin-top: 0; }
+.country-head small { font-size: inherit; font-weight: 600; }
 
 /* ---------- map markers ---------- */
 .pin {
@@ -259,6 +289,20 @@ h1 { font-size: 1.4rem; font-weight: 800; }
 .leaflet-popup-content { margin: 12px 16px; font-family: inherit; }
 .popup-place { font-weight: 700; margin-bottom: 4px; }
 .popup-names { margin: 0; padding-left: 18px; color: #374151; max-height: 220px; overflow-y: auto; }
+.popup-cluster { max-height: 280px; overflow-y: auto; }
+.popup-cluster .popup-names { max-height: none; }
+.popup-sub { margin-top: 8px; font-weight: 600; font-size: 0.85rem; color: var(--muted); }
+.cluster {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 800;
+  font-size: 0.9rem;
+  background: linear-gradient(135deg, var(--primary), #7c3aed 60%, var(--primary-2));
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 5px rgba(79, 70, 229, 0.18), 0 4px 12px rgba(17, 24, 39, 0.3);
+}
 
 /* ---------- login ---------- */
 .login-wrap {
@@ -310,8 +354,9 @@ h1 { font-size: 1.4rem; font-weight: 800; }
 .more-fields[open] summary::before { content: "– "; }
 .more-fields[open] summary { margin-bottom: 6px; }
 
-.me-links { display: flex; gap: 14px; margin-top: 2px; }
-.me-links .btn-link { font-size: 0.8rem; padding: 2px 0; }
+.me-card { flex-wrap: wrap; }
+.me-links { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px 16px; padding-left: 50px; margin-top: -4px; }
+.me-links .btn-link { font-size: 0.82rem; padding: 2px 0; }
 
 .add-fab {
   position: absolute;
@@ -344,6 +389,26 @@ h1 { font-size: 1.4rem; font-weight: 800; }
 .hint { margin: 12px 0 0; color: var(--muted); font-size: 0.85rem; }
 .hint.top { margin: -6px 0 14px; }
 .admin-row .answer { white-space: normal; overflow-wrap: anywhere; }
+.admin-row { flex-wrap: wrap; }
+.admin-row .person-text { flex: 1 1 220px; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.btn-ghost.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn-ghost.primary:hover { background: #4338ca; }
+.admin-row.merging { background: #eef2ff; border-radius: 12px; padding: 10px 12px; }
+.admin-row.editing { display: block; padding: 14px 0; }
+.admin-edit .field select { width: 100%; }
+.dup-tag {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 0.7rem;
+  font-weight: 700;
+  vertical-align: middle;
+}
+.hint.dupes { margin: 0 0 10px; color: #92400e; }
+.merge-banner .hint { margin: 0 0 10px; font-weight: 400; }
 .field-rows { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .field-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .field-label, .field-select {

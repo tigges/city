@@ -44,6 +44,7 @@
   }
 
   // ---------- countries datalist ----------
+  const countryCodes = new Map();
   try {
     const names = new Intl.DisplayNames(["en"], { type: "region" });
     const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -53,7 +54,10 @@
       const code = a + b;
       if (skip.has(code)) continue;
       const n = names.of(code);
-      if (n && n !== code) countries.add(n);
+      if (n && n !== code) {
+        countries.add(n);
+        countryCodes.set(n.toLowerCase(), code);
+      }
     }
     $("countries").append(...[...countries].sort().map((value) => el("option", { value })));
   } catch {}
@@ -159,78 +163,187 @@
     box.replaceChildren(chip(null, "Everyone"), ...sorted.map(([key, t]) => chip(key, t.label, t.count)));
   }
 
-  function renderMap() {
-    markerLayer.clearLayers();
-    markersByPlace.clear();
-    const shown = visibleEntries();
-    const groups = new Map();
-    for (const e of shown) {
-      const key = placeKey(e);
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(e);
-    }
-    for (const [key, group] of groups) {
-      const first = group[0];
-      const label = group.length > 1 ? String(group.length) : initials(first.name);
-      const icon = L.divIcon({
-        className: "pin-icon",
-        html: `<div class="pin" style="background:${colorFor(first.city)}"><span></span></div>`,
-        iconSize: [34, 34],
-        iconAnchor: [17, 34],
-        popupAnchor: [0, -32],
-      });
-      const place = [first.city, first.region, first.country].filter(Boolean).join(", ");
-      const marker = L.marker([first.lat, first.lon], { icon, title: place });
-      marker.on("add", () => {
-        const span = marker.getElement()?.querySelector(".pin span");
-        if (span) span.textContent = label;
-      });
-      const popup = el("div", {},
-        el("div", { className: "popup-place", textContent: group.length > 1 ? `${place} · ${group.length} people` : place }),
-        el("ul", { className: "popup-names" }, ...[...group].sort((a, b) => a.name.localeCompare(b.name)).map((e) => {
+  function placeLabel(e) {
+    return [e.city, e.region, e.country].filter(Boolean).join(", ");
+  }
+
+  function popupFor(places) {
+    const box = el("div", { className: places.length > 1 ? "popup-cluster" : "" });
+    const total = places.reduce((n, p) => n + p.people.length, 0);
+    if (places.length > 1) box.append(el("div", { className: "popup-place", textContent: `${total} people in ${places.length} places` }));
+    for (const p of places) {
+      const place = placeLabel(p.people[0]);
+      box.append(
+        el("div", { className: places.length > 1 ? "popup-sub" : "popup-place", textContent: p.people.length > 1 ? `${place} · ${p.people.length} people` : place }),
+        el("ul", { className: "popup-names" }, ...[...p.people].sort((a, b) => a.name.localeCompare(b.name)).map((e) => {
           const li = el("li", { textContent: [e.name, ...textDetails(e)].join(" · ") });
           for (const a of links(e)) li.append(" · ", a);
           return li;
         })),
       );
-      marker.bindPopup(popup);
-      marker.addTo(markerLayer);
-      markersByPlace.set(key, marker);
     }
-    if (fitPending && shown.length) {
-      fitPending = false;
-      const bounds = L.latLngBounds(shown.map((e) => [e.lat, e.lon]));
-      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 6 });
-    }
+    return box;
   }
 
+  // Places closer than this on screen share one bubble, so a zoomed-out map of 40 European cities
+  // isn't a pile of overlapping pins. Zooming in splits them up again.
+  const CLUSTER_PX = 44;
+  let focusKey = null;
+
+  function clusterPlaces(places) {
+    const clusters = [];
+    for (const p of [...places].sort((a, b) => b.people.length - a.people.length)) {
+      const point = map.latLngToLayerPoint([p.lat, p.lon]);
+      const near = p.key !== focusKey && clusters.find((c) => !c.focus && c.point.distanceTo(point) < CLUSTER_PX);
+      if (near) near.places.push(p);
+      else clusters.push({ point, places: [p], focus: p.key === focusKey });
+    }
+    return clusters;
+  }
+
+  function placeMarker(p) {
+    const first = p.people[0];
+    const icon = L.divIcon({
+      className: "pin-icon",
+      html: `<div class="pin" style="background:${colorFor(first.city)}"><span></span></div>`,
+      iconSize: [34, 34],
+      iconAnchor: [17, 34],
+      popupAnchor: [0, -32],
+    });
+    const marker = L.marker([p.lat, p.lon], { icon, title: placeLabel(first) });
+    const label = p.people.length > 1 ? String(p.people.length) : initials(first.name);
+    marker.on("add", () => {
+      const span = marker.getElement()?.querySelector(".pin span");
+      if (span) span.textContent = label;
+    });
+    marker.bindPopup(popupFor([p]));
+    markersByPlace.set(p.key, marker);
+    return marker;
+  }
+
+  function clusterMarker(places) {
+    const total = places.reduce((n, p) => n + p.people.length, 0);
+    const lat = places.reduce((s, p) => s + p.lat * p.people.length, 0) / total;
+    const lon = places.reduce((s, p) => s + p.lon * p.people.length, 0) / total;
+    const size = Math.round(36 + Math.min(18, Math.log2(total) * 4));
+    const icon = L.divIcon({
+      className: "pin-icon",
+      html: `<div class="cluster" style="width:${size}px;height:${size}px">${total}</div>`,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+    });
+    const names = places.map((p) => p.people[0].city).slice(0, 4).join(", ") + (places.length > 4 ? "…" : "");
+    const marker = L.marker([lat, lon], { icon, title: `${total} people: ${names}` });
+    const bounds = L.latLngBounds(places.map((p) => [p.lat, p.lon]));
+    marker.on("click", () => {
+      // Places a few streets apart may never split, so past that point show everyone in one popup.
+      if (map.getBoundsZoom(bounds.pad(0.5)) > map.getZoom() && map.getZoom() < 15) {
+        map.flyToBounds(bounds.pad(0.5), { duration: 0.6, maxZoom: 15 });
+      } else {
+        L.popup({ offset: [0, -size / 2] }).setLatLng([lat, lon]).setContent(popupFor(places)).openOn(map);
+      }
+    });
+    return marker;
+  }
+
+  function renderMap() {
+    const shown = visibleEntries();
+    if (fitPending && shown.length) {
+      // This can fire zoomend, which renders the markers; the render below then replaces them.
+      fitPending = false;
+      const bounds = L.latLngBounds(shown.map((e) => [e.lat, e.lon]));
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 6, animate: false });
+    }
+    const reopen = [...markersByPlace].find(([, m]) => m.isPopupOpen())?.[0];
+    markerLayer.clearLayers();
+    markersByPlace.clear();
+    const places = new Map();
+    for (const e of shown) {
+      const key = placeKey(e);
+      if (!places.has(key)) places.set(key, { key, lat: e.lat, lon: e.lon, people: [] });
+      places.get(key).people.push(e);
+    }
+    for (const c of clusterPlaces(places.values())) {
+      (c.places.length > 1 ? clusterMarker(c.places) : placeMarker(c.places[0])).addTo(markerLayer);
+    }
+    if (reopen) markersByPlace.get(reopen)?.openPopup();
+  }
+
+  map.on("zoomend", renderMap);
+
   function focusEntry(e) {
+    const key = placeKey(e);
+    focusKey = key;
+    renderMap();
     map.flyTo([e.lat, e.lon], Math.max(map.getZoom(), 6), { duration: 0.8 });
-    markersByPlace.get(placeKey(e))?.openPopup();
+    map.once("moveend", () => markersByPlace.get(key)?.openPopup());
     if (window.innerWidth < 900) $("map").scrollIntoView({ behavior: "smooth" });
   }
 
   // ---------- list & stats ----------
+  const fold = (s) => s.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+
+  function flag(country) {
+    const code = countryCodes.get(country.toLowerCase());
+    return code ? String.fromCodePoint(...[...code].map((c) => 0x1f1a5 + c.charCodeAt(0))) : "";
+  }
+
+  function personRow(e) {
+    const nameEl = el("strong", { textContent: e.name });
+    if (e.id === me.entryId) nameEl.append(el("span", { className: "you-badge", textContent: "YOU" }));
+    const btn = el("button", { type: "button", className: "person" },
+      el("span", { className: "avatar", textContent: initials(e.name), style: `background:${colorFor(e.city)}` }),
+      el("span", { className: "person-text" }, nameEl, el("span", {},
+        listOrder === "country" ? e.city : `${e.city}, ${e.country}`,
+        ...FIELDS.filter((f) => f.type !== "link" && valueOf(e, f)).flatMap((f) => [
+          " · ",
+          el("span", { className: f.id === "industry" ? "industry-tag" : "", textContent: valueOf(e, f) }),
+        ]),
+      )),
+    );
+    btn.addEventListener("click", () => focusEntry(e));
+    return el("li", {}, btn);
+  }
+
+  let listOrder = me.listOrder === "country" ? "country" : "newest";
+
+  function setListOrder(order) {
+    listOrder = order;
+    me.listOrder = order;
+    saveMe();
+    renderList();
+  }
+
+  $("order-newest").addEventListener("click", () => setListOrder("newest"));
+  $("order-country").addEventListener("click", () => setListOrder("country"));
+  $("list-search").addEventListener("input", () => renderList());
+
   function renderList() {
     const list = $("people-list");
-    list.replaceChildren();
-    const sorted = [...visibleEntries()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    for (const e of sorted) {
-      const nameEl = el("strong", { textContent: e.name });
-      if (e.id === me.entryId) nameEl.append(el("span", { className: "you-badge", textContent: "YOU" }));
-      const btn = el("button", { type: "button", className: "person" },
-        el("span", { className: "avatar", textContent: initials(e.name), style: `background:${colorFor(e.city)}` }),
-        el("span", { className: "person-text" }, nameEl, el("span", {},
-          `${e.city}, ${e.country}`,
-          ...FIELDS.filter((f) => f.type !== "link" && valueOf(e, f)).flatMap((f) => [
-            " · ",
-            el("span", { className: f.id === "industry" ? "industry-tag" : "", textContent: valueOf(e, f) }),
-          ]),
-        )),
-      );
-      btn.addEventListener("click", () => focusEntry(e));
-      list.append(el("li", {}, btn));
+    if (entries.length < 6) $("list-search").value = "";
+    const query = fold($("list-search").value.trim());
+    const matches = (e) => !query || fold([e.name, e.city, e.region, e.country, ...textDetails(e)].filter(Boolean).join(" ")).includes(query);
+    const shown = visibleEntries().filter(matches);
+    $("list-tools").hidden = entries.length < 6;
+    $("order-newest").setAttribute("aria-pressed", String(listOrder === "newest"));
+    $("order-country").setAttribute("aria-pressed", String(listOrder === "country"));
+
+    if (listOrder === "country") {
+      const byCountry = new Map();
+      for (const e of shown) {
+        if (!byCountry.has(e.country)) byCountry.set(e.country, []);
+        byCountry.get(e.country).push(e);
+      }
+      const groups = [...byCountry].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+      list.replaceChildren(...groups.flatMap(([country, people]) => [
+        el("li", { className: "country-head" }, `${flag(country)} ${country}`.trim(), el("small", { textContent: people.length })),
+        ...people.sort((a, b) => a.city.localeCompare(b.city) || a.name.localeCompare(b.name)).map(personRow),
+      ]));
+    } else {
+      list.replaceChildren(...[...shown].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(personRow));
     }
+    $("no-match").hidden = !(entries.length && !shown.length);
+    $("no-match").textContent = query ? `No one matches "${$("list-search").value.trim()}".` : "";
     $("empty").hidden = entries.length > 0;
     $("stat-people").textContent = entries.length;
     $("stat-cities").textContent = new Set(entries.map(placeKey)).size;

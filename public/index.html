@@ -79,12 +79,12 @@
           <div class="me-text">
             <strong>You're on the map!</strong>
             <span id="me-summary"></span>
-            <span class="me-links">
-              <button type="button" id="copy-edit-link" class="btn-link">Edit from another phone</button>
-              <button type="button" id="remove-me-card" class="btn-link danger">Remove</button>
-            </span>
           </div>
           <button type="button" id="edit-me" class="btn-ghost">Edit</button>
+          <div class="me-links">
+            <button type="button" id="copy-edit-link" class="btn-link">Edit from another phone</button>
+            <button type="button" id="remove-me-card" class="btn-link danger">Remove</button>
+          </div>
         </div>
 
         <button type="button" id="share" class="btn-share">
@@ -95,7 +95,15 @@
         <section class="people">
           <h2>Who's here</h2>
           <div id="filters" class="filters" role="group" aria-label="Filter by industry" hidden></div>
+          <div id="list-tools" class="list-tools" hidden>
+            <input id="list-search" type="search" placeholder="Search names, cities, jobs…" autocomplete="off" aria-label="Search the list" />
+            <div class="segmented" role="group" aria-label="Order the list">
+              <button type="button" id="order-newest" aria-pressed="true">Newest</button>
+              <button type="button" id="order-country" aria-pressed="false">By country</button>
+            </div>
+          </div>
           <ul id="people-list"></ul>
+          <p id="no-match" class="empty" hidden></p>
           <p id="empty" class="empty">No one yet. Be the first to drop a pin!</p>
         </section>
       </section>
