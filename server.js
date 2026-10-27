@@ -166,7 +166,7 @@ function normalizeLink(value, handleBase) {
 
 function restoredEntry(e) {
   if (!e || typeof e !== "object") return null;
-  const name = clean(e.name, 40);
+  const name = clean(e.name, 60);
   const city = clean(e.city, 80);
   const country = clean(e.country, 60);
   const lat = Number(e.lat);
@@ -432,7 +432,7 @@ async function handleApi(req, res, url) {
     if (rateLimited(`post:${clientIp(req)}`)) return send(res, 429, { error: "Too many submissions, please wait a minute." });
 
     const body = await readJson(req);
-    const name = clean(body.name, 40);
+    const name = clean(body.name, 60);
     const city = clean(body.city, 80);
     const country = clean(body.country, 60);
     const clientId = clean(body.clientId, 64);
