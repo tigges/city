@@ -536,12 +536,15 @@ async function handleApi(req, res, url) {
         }
       }
 
+      // Claiming from a new browser usually comes with the optional fields left empty; keep what's there.
+      if (body.claim && existing) for (const id of Object.keys(answers)) if (!answers[id]) delete answers[id];
       const { industry = existing?.industry, ...rest } = answers;
       const extra = { ...existing?.extra, ...rest };
       for (const key of Object.keys(extra)) if (!extra[key]) delete extra[key];
       const next = {
         id: existing?.id || crypto.randomUUID(),
-        name,
+        // "That's me" from a new browser shouldn't turn "Charles Tigges" into "charles tigges".
+        name: body.claim && existing && sameName(existing.name, name) ? existing.name : name,
         city: place.city,
         region: region || undefined,
         country: place.country,

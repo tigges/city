@@ -310,8 +310,9 @@ h1 { font-size: 1.4rem; font-weight: 800; }
 .more-fields[open] summary::before { content: "– "; }
 .more-fields[open] summary { margin-bottom: 6px; }
 
-.me-links { display: flex; gap: 14px; margin-top: 2px; }
-.me-links .btn-link { font-size: 0.8rem; padding: 2px 0; }
+.me-card { flex-wrap: wrap; }
+.me-links { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px 16px; padding-left: 50px; margin-top: -4px; }
+.me-links .btn-link { font-size: 0.82rem; padding: 2px 0; }
 
 .add-fab {
   position: absolute;
