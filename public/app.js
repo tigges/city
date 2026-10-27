@@ -187,7 +187,7 @@
 
   // Places closer than this on screen share one bubble, so a zoomed-out map of 40 European cities
   // isn't a pile of overlapping pins. Zooming in splits them up again.
-  const CLUSTER_PX = 44;
+  const CLUSTER_PX = 56;
   let focusKey = null;
 
   function clusterPlaces(places) {

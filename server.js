@@ -491,8 +491,16 @@ const adminHtml = fs
   .readFileSync(path.join(__dirname, "views", "admin.html"), "utf8")
   .replaceAll("{{TITLE}}", escapeHtml(APP_TITLE));
 
+// Pages link to /style.css?v=<hash>, so a deploy can't pair new HTML with a cached old stylesheet or script.
+const ASSET_VERSION = crypto.createHash("sha256")
+  .update(fs.readFileSync(path.join(PUBLIC_DIR, "style.css")))
+  .update(fs.readFileSync(path.join(PUBLIC_DIR, "app.js")))
+  .digest("hex")
+  .slice(0, 10);
+
 function sendHtml(req, res, status, html) {
-  send(res, status, html.replaceAll("{{ORIGIN}}", siteOrigin(req)), { "Content-Type": STATIC_TYPES[".html"], "Cache-Control": "no-cache" });
+  html = html.replaceAll("{{ORIGIN}}", siteOrigin(req)).replaceAll("{{ASSET_VERSION}}", ASSET_VERSION);
+  send(res, status, html, { "Content-Type": STATIC_TYPES[".html"], "Cache-Control": "no-cache" });
 }
 
 // Where to go after logging in, so links like a personal edit link survive the password page.
