@@ -59,10 +59,15 @@
           <div id="extra-fields"></div>
           <datalist id="industries"></datalist>
           <p id="form-error" class="form-error" role="alert" hidden></p>
+          <div id="form-choice" class="form-choice" role="alert" hidden>
+            <p id="choice-title"></p>
+            <div id="choice-buttons" class="choice-buttons"></div>
+          </div>
           <button id="submit" class="btn-primary" type="submit">
             <span class="btn-label">Put me on the map</span>
             <span class="spinner" aria-hidden="true"></span>
           </button>
+          <p class="privacy-note">Only your city is shown, never your address. Only people with the group link can see the map, and you can edit or remove your pin any time.</p>
           <div id="me-actions" class="me-actions" hidden>
             <button type="button" id="cancel-edit" class="btn-link">Cancel</button>
             <button type="button" id="remove-me" class="btn-link danger">Remove me from the map</button>
@@ -74,6 +79,10 @@
           <div class="me-text">
             <strong>You're on the map!</strong>
             <span id="me-summary"></span>
+            <span class="me-links">
+              <button type="button" id="copy-edit-link" class="btn-link">Edit from another phone</button>
+              <button type="button" id="remove-me-card" class="btn-link danger">Remove</button>
+            </span>
           </div>
           <button type="button" id="edit-me" class="btn-ghost">Edit</button>
         </div>
@@ -93,6 +102,7 @@
 
       <section class="map-wrap">
         <div id="map" aria-label="Map of the group"></div>
+        <button type="button" id="add-fab" class="add-fab" hidden>📍 Add yourself</button>
       </section>
     </main>
 

@@ -258,7 +258,7 @@ h1 { font-size: 1.4rem; font-weight: 800; }
 .leaflet-popup-content-wrapper { border-radius: 14px; box-shadow: var(--shadow); }
 .leaflet-popup-content { margin: 12px 16px; font-family: inherit; }
 .popup-place { font-weight: 700; margin-bottom: 4px; }
-.popup-names { margin: 0; padding-left: 18px; color: #374151; }
+.popup-names { margin: 0; padding-left: 18px; color: #374151; max-height: 220px; overflow-y: auto; }
 
 /* ---------- login ---------- */
 .login-wrap {
@@ -272,6 +272,63 @@ h1 { font-size: 1.4rem; font-weight: 800; }
 .login-card .brand-pin { margin: 0 auto 14px; }
 .login-card .subtitle { margin: 6px 0 20px; }
 .login-card .field { text-align: left; }
+
+/* ---------- form follow-ups ---------- */
+.form-choice {
+  margin: 0 0 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+}
+.form-choice p { margin: 0 0 10px; font-weight: 600; font-size: 0.92rem; }
+.choice-buttons { display: flex; flex-direction: column; gap: 6px; }
+.btn-choice {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 10px;
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 500;
+  color: var(--text);
+}
+.btn-choice:hover { border-color: var(--primary); }
+.btn-choice.primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+.privacy-note { margin: 10px 0 0; color: var(--muted); font-size: 0.78rem; line-height: 1.4; text-align: center; }
+
+.more-fields { margin-bottom: 12px; }
+.more-fields summary {
+  cursor: pointer;
+  padding: 8px 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--primary);
+  list-style: none;
+}
+.more-fields summary::-webkit-details-marker { display: none; }
+.more-fields summary::before { content: "+ "; }
+.more-fields[open] summary::before { content: "– "; }
+.more-fields[open] summary { margin-bottom: 6px; }
+
+.me-links { display: flex; gap: 14px; margin-top: 2px; }
+.me-links .btn-link { font-size: 0.8rem; padding: 2px 0; }
+
+.add-fab {
+  position: absolute;
+  z-index: 500;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 20px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, var(--primary), #7c3aed 60%, var(--primary-2));
+  box-shadow: 0 8px 24px rgba(79, 70, 229, 0.45);
+  white-space: nowrap;
+}
+@media (min-width: 900px) { .add-fab { display: none; } }
 
 /* ---------- admin ---------- */
 .admin-wrap { max-width: 640px; margin: 0 auto; padding: 24px 16px 40px; display: flex; flex-direction: column; gap: 16px; }

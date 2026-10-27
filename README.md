@@ -8,6 +8,8 @@ the URL into a WhatsApp group, optionally behind a shared password.
 - Cities are looked up automatically with OpenStreetMap, so nobody needs to know coordinates
 - People in the same city share one pin that shows a count, and tapping it lists their names
 - Each person can edit or remove their own pin (remembered on their phone), and resubmitting updates their pin instead of adding a duplicate
+- "Edit from another phone" gives people a personal link, so they can edit from Safari as well as WhatsApp's built-in browser. If someone adds the same name in the same city from a new browser, they're asked "Is that you?" instead of creating a duplicate
+- If a city name exists several times in a country (Springfield, Portland), people pick the right one from a short list
 - Tap an industry above the list to show only those people on the list and map
 - The map refreshes every 15 seconds, so new people appear without reloading
 - A "Share link with the group" button opens WhatsApp or the phone's share sheet

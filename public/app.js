@@ -65,7 +65,12 @@
   );
 
   // ---------- configurable fields ----------
+  // With several optional fields the form gets long on a phone, so they go behind "More about you".
   const extraInputs = new Map();
+  const optionalCount = FIELDS.filter((f) => f.mode !== "required").length;
+  const more = optionalCount >= 2
+    ? el("details", { className: "more-fields" }, el("summary", {}, "More about you ", el("em", { className: "optional", textContent: "optional" })))
+    : null;
   for (const f of FIELDS) {
     const input = el("input", {
       id: `field-${f.id}`,
@@ -80,10 +85,11 @@
     }
     if (f.type === "link") input.inputMode = "url";
     const label = el("span", { textContent: f.label });
-    if (f.mode !== "required") label.append(el("em", { className: "optional", textContent: "optional" }));
-    $("extra-fields").append(el("label", { className: "field" }, label, input));
+    if (f.mode !== "required" && !more) label.append(el("em", { className: "optional", textContent: "optional" }));
+    (f.mode !== "required" && more ? more : $("extra-fields")).append(el("label", { className: "field" }, label, input));
     extraInputs.set(f.id, input);
   }
+  if (more) $("extra-fields").append(more);
 
   function valueOf(e, f) {
     return f.id === "industry" ? e.industry : e.extra?.[f.id];
@@ -173,14 +179,15 @@
         iconAnchor: [17, 34],
         popupAnchor: [0, -32],
       });
-      const marker = L.marker([first.lat, first.lon], { icon, title: `${first.city}, ${first.country}` });
+      const place = [first.city, first.region, first.country].filter(Boolean).join(", ");
+      const marker = L.marker([first.lat, first.lon], { icon, title: place });
       marker.on("add", () => {
         const span = marker.getElement()?.querySelector(".pin span");
         if (span) span.textContent = label;
       });
       const popup = el("div", {},
-        el("div", { className: "popup-place", textContent: `${first.city}, ${first.country}` }),
-        el("ul", { className: "popup-names" }, ...group.map((e) => {
+        el("div", { className: "popup-place", textContent: group.length > 1 ? `${place} · ${group.length} people` : place }),
+        el("ul", { className: "popup-names" }, ...[...group].sort((a, b) => a.name.localeCompare(b.name)).map((e) => {
           const li = el("li", { textContent: [e.name, ...textDetails(e)].join(" · ") });
           for (const a of links(e)) li.append(" · ", a);
           return li;
@@ -244,6 +251,7 @@
     $("form-title").textContent = mine ? "Update your pin" : "Add yourself";
     $("submit").querySelector(".btn-label").textContent = mine ? "Save changes" : "Put me on the map";
     if (mine) $("me-summary").textContent = `${mine.name} · ${mine.city}, ${mine.country}`;
+    $("add-fab").hidden = !!mine;
   }
 
   function render() {
@@ -280,9 +288,33 @@
     $("form-error").hidden = !message;
   }
 
-  form.addEventListener("submit", async (ev) => {
+  function hideChoice() {
+    $("form-choice").hidden = true;
+    $("choice-buttons").replaceChildren();
+  }
+
+  // The server asks a follow-up question (which Springfield? is that you?) as a 409 with a code.
+  function showChoice(title, buttons) {
+    $("choice-title").textContent = title;
+    $("choice-buttons").replaceChildren(...buttons.map(([text, onClick, primary]) => {
+      const b = el("button", { type: "button", className: primary ? "btn-choice primary" : "btn-choice", textContent: text });
+      b.addEventListener("click", onClick);
+      return b;
+    }));
+    $("form-choice").hidden = false;
+    $("form-choice").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  for (const input of [...fields, ...extraInputs.values()]) input.addEventListener("input", hideChoice);
+
+  form.addEventListener("submit", (ev) => {
     ev.preventDefault();
+    submitEntry();
+  });
+
+  async function submitEntry(choice = {}) {
     showError("");
+    hideChoice();
     let firstInvalid = null;
     for (const f of requiredFields) {
       const bad = !f.value.trim();
@@ -308,9 +340,20 @@
           country: fields[2].value,
           fields: Object.fromEntries([...extraInputs].map(([id, input]) => [id, input.value])),
           clientId: me.clientId,
+          ...choice,
         }),
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 409 && data.code === "choose_place") {
+        return showChoice(data.error, data.options.map((o) => [o.label, () => submitEntry({ ...choice, place: { lat: o.lat, lon: o.lon } })]));
+      }
+      if (res.status === 409 && data.code === "duplicate") {
+        const d = data.duplicate;
+        return showChoice(`${d.name} in ${d.city} is already on the map. Is that you?`, [
+          ["Yes, that's me: update it", () => submitEntry({ ...choice, claim: d.id }), true],
+          ["No, add me as well", () => submitEntry({ ...choice, addAnyway: true })],
+        ]);
+      }
       if (!res.ok) throw new Error(data.error || "Something went wrong. Please try again.");
       me.entryId = data.id;
       saveMe();
@@ -319,14 +362,14 @@
       activeIndustry = null;
       render();
       focusEntry(data);
-      toast(`📍 Welcome, ${data.name}! You're on the map.`);
+      toast(choice.claim ? "📍 Got it. You can now edit your pin from here too." : `📍 Welcome, ${data.name}! You're on the map.`);
     } catch (err) {
       showError(err.message);
     } finally {
       btn.disabled = false;
       btn.classList.remove("loading");
     }
-  });
+  }
 
   for (const f of requiredFields) f.addEventListener("input", () => f.setAttribute("aria-invalid", "false"));
 
@@ -338,7 +381,9 @@
     fields[1].value = mine.city;
     fields[2].value = mine.country;
     for (const f of FIELDS) extraInputs.get(f.id).value = valueOf(mine, f) || "";
+    if (more) more.open = FIELDS.some((f) => f.mode !== "required" && valueOf(mine, f));
     showError("");
+    hideChoice();
     renderMe();
     fields[1].focus();
   });
@@ -346,10 +391,36 @@
   $("cancel-edit").addEventListener("click", () => {
     editing = false;
     showError("");
+    hideChoice();
     renderMe();
   });
 
-  $("remove-me").addEventListener("click", async () => {
+  $("remove-me").addEventListener("click", removeMe);
+  $("remove-me-card").addEventListener("click", removeMe);
+
+  // The edit link carries this browser's clientId, so opening it elsewhere (Safari vs WhatsApp's
+  // in-app browser, or another phone) gives that browser the right to edit the same pin.
+  $("copy-edit-link").addEventListener("click", async () => {
+    const url = `${location.origin}/?me=${encodeURIComponent(me.clientId)}`;
+    const note = "Open this link on another phone or browser to edit your pin there. Keep it to yourself.";
+    try {
+      if (navigator.share && matchMedia("(pointer: coarse)").matches) {
+        await navigator.share({ title: "My edit link", text: note, url });
+      } else {
+        await navigator.clipboard.writeText(url);
+        toast("Edit link copied. Send it to yourself, e.g. in a chat with yourself.");
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") prompt(note, url);
+    }
+  });
+
+  $("add-fab").addEventListener("click", () => {
+    $("entry-form").scrollIntoView({ behavior: "smooth", block: "start" });
+    setTimeout(() => fields[0].focus({ preventScroll: true }), 400);
+  });
+
+  async function removeMe() {
     const mine = myEntry();
     if (!mine || !confirm("Remove your pin from the map?")) return;
     const res = await fetch(`/api/entries/${mine.id}`, {
@@ -365,7 +436,7 @@
     form.reset();
     render();
     toast("Your pin was removed.");
-  });
+  }
 
   // ---------- share ----------
   $("share").addEventListener("click", async () => {
@@ -382,8 +453,26 @@
     window.open(`https://wa.me/?text=${encodeURIComponent(`${text} ${url}`)}`, "_blank", "noopener");
   });
 
+  async function adoptEditLink() {
+    const params = new URLSearchParams(location.search);
+    const clientId = params.get("me");
+    if (!clientId) return;
+    params.delete("me");
+    history.replaceState(null, "", location.pathname + ([...params].length ? `?${params}` : "") + location.hash);
+    try {
+      const res = await fetch("/api/mine", { headers: { "x-client-id": clientId }, cache: "no-store" });
+      if (!res.ok) return toast("That edit link doesn't match a pin any more.");
+      me.clientId = clientId;
+      me.entryId = (await res.json()).id;
+      saveMe();
+      toast("✓ You can now edit your pin from this browser.");
+    } catch {
+      toast("Couldn't check your edit link. Please try again.");
+    }
+  }
+
   renderMe();
-  load();
+  adoptEditLink().then(load);
   setInterval(() => document.visibilityState === "visible" && load(), 15000);
   document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && load());
 })();

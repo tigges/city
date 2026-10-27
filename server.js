@@ -81,7 +81,7 @@ function mutate(fn) {
   const run = writeChain.then(async () => {
     const entries = await store.load();
     const result = await fn(entries);
-    await store.save(entries);
+    if (!result?.conflict) await store.save(entries);
     return result;
   });
   writeChain = run.catch(() => {});
@@ -183,6 +183,7 @@ function restoredEntry(e) {
     id: typeof e.id === "string" && /^[\w-]{1,64}$/.test(e.id) ? e.id : crypto.randomUUID(),
     name,
     city,
+    region: clean(e.region, 80) || undefined,
     country,
     industry: clean(e.industry, 100) || undefined,
     extra: Object.keys(extra).length ? extra : undefined,
@@ -191,6 +192,9 @@ function restoredEntry(e) {
     createdAt: date(e.createdAt),
     updatedAt: date(e.updatedAt),
     clientId: clean(e.clientId, 64) || undefined,
+    otherClientIds: Array.isArray(e.otherClientIds)
+      ? e.otherClientIds.map((c) => clean(c, 64)).filter(Boolean).slice(-MAX_OTHER_CLIENTS)
+      : undefined,
   };
 }
 
@@ -239,8 +243,26 @@ async function openMeteo(city, country, code) {
   const url = new URL("https://geocoding-api.open-meteo.com/v1/search");
   url.search = new URLSearchParams({ name: city, count: "20", language: "en", format: "json" });
   const { results = [] } = await getJson(url);
-  const hit = results.find((r) => sameCountry(r.country_code, r.country, code, country));
-  return hit && { lat: hit.latitude, lon: hit.longitude, country: hit.country };
+  const matches = results.filter((r) => sameCountry(r.country_code, r.country, code, country));
+  const hit = matches[0];
+  return hit && { lat: hit.latitude, lon: hit.longitude, country: hit.country, options: placeOptions(matches, city) };
+}
+
+// When a country has several sizeable places with this name (Springfield, Portland, Frankfurt), the
+// visitor is asked which one they mean. Small namesakes (the hamlet called Cambridge) don't count.
+function placeOptions(matches, city) {
+  const top = matches[0].population || 0;
+  const want = city.toLowerCase();
+  const seen = new Set();
+  const options = [];
+  for (const [i, m] of matches.entries()) {
+    if (i > 0 && (!m.name.toLowerCase().startsWith(want) || (m.population || 0) < Math.max(top * 0.05, 10_000))) continue;
+    const label = [m.name, m.admin1].filter(Boolean).join(", ");
+    if (seen.has(label)) continue;
+    seen.add(label);
+    options.push({ label, region: m.admin1 || "", lat: m.latitude, lon: m.longitude });
+  }
+  return options.length > 1 ? options.slice(0, 5) : undefined;
 }
 
 async function photon(city, country, code) {
@@ -283,7 +305,7 @@ async function geocode(city, country) {
   if (!hit && failures === providers.length) throw new Error("All geocoders failed");
 
   const displayCity = city === city.toLowerCase() ? city.replace(/(^|[\s-])\p{L}/gu, (m) => m.toUpperCase()) : city;
-  const result = hit ? { lat: hit.lat, lon: hit.lon, city: displayCity, country: hit.country || countryName } : null;
+  const result = hit ? { lat: hit.lat, lon: hit.lon, city: displayCity, country: hit.country || countryName, options: hit.options } : null;
   geoCache.set(key, result);
   return result;
 }
@@ -345,7 +367,24 @@ function clean(value, max) {
 }
 
 // Answers to fields that are switched off are kept, but only admins see them.
-function publicEntry({ clientId, ...rest }, active) {
+// An entry can be edited from several browsers (e.g. WhatsApp's in-app browser and Safari), so besides
+// the clientId it was created with it may carry otherClientIds that were added via "That's me".
+const MAX_OTHER_CLIENTS = 5;
+
+function ownedBy(entry, clientId) {
+  return !!clientId && (entry.clientId === clientId || !!entry.otherClientIds?.includes(clientId));
+}
+
+function sameName(a, b) {
+  const norm = (s) => s.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+  return norm(a) === norm(b);
+}
+
+function near(a, b, tolerance = 0.01) {
+  return Math.abs(a.lat - b.lat) < tolerance && Math.abs(a.lon - b.lon) < tolerance;
+}
+
+function publicEntry({ clientId, otherClientIds, ...rest }, active) {
   if (!active) return rest;
   const out = { ...rest };
   delete out.extra;
@@ -404,17 +443,27 @@ function sendHtml(req, res, status, html) {
   send(res, status, html.replaceAll("{{ORIGIN}}", siteOrigin(req)), { "Content-Type": STATIC_TYPES[".html"], "Cache-Control": "no-cache" });
 }
 
-function sendLogin(req, res, status, error = "") {
-  sendHtml(req, res, status, loginTemplate.replace("{{ERROR}}", error ? `<p class="form-error" role="alert">${escapeHtml(error)}</p>` : ""));
+// Where to go after logging in, so links like a personal edit link survive the password page.
+function safeNext(value) {
+  const s = String(value || "");
+  return s.startsWith("/") && !s.startsWith("//") && !s.includes("\\") && !s.startsWith("/login") && s.length <= 300 ? s : "/";
+}
+
+function sendLogin(req, res, status, error = "", next = req.url) {
+  const html = loginTemplate
+    .replace("{{ERROR}}", error ? `<p class="form-error" role="alert">${escapeHtml(error)}</p>` : "")
+    .replace("{{NEXT}}", escapeHtml(safeNext(next)));
+  sendHtml(req, res, status, html);
 }
 
 async function handleLogin(req, res) {
-  if (rateLimited(`login:${clientIp(req)}`)) return sendLogin(req, res, 429, "Too many attempts. Please wait a minute.");
   const form = await readForm(req);
-  if (!safeEqual(form.get("password") || "", SITE_PASSWORD)) return sendLogin(req, res, 401, "That password isn't right.");
+  const next = safeNext(form.get("next"));
+  if (rateLimited(`login:${clientIp(req)}`)) return sendLogin(req, res, 429, "Too many attempts. Please wait a minute.", next);
+  if (!safeEqual(form.get("password") || "", SITE_PASSWORD)) return sendLogin(req, res, 401, "That password isn't right.", next);
   const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
   res.writeHead(303, {
-    Location: "/",
+    Location: next,
     "Set-Cookie": `${AUTH_COOKIE}=${AUTH_TOKEN}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax${secure}`,
   });
   res.end();
@@ -458,8 +507,35 @@ async function handleApi(req, res, url) {
     }
     if (!place) return send(res, 422, { error: `We couldn't find "${city}, ${country}". Check the spelling?` });
 
-    const entry = await mutate((entries) => {
-      const existing = clientId ? entries.find((e) => e.clientId === clientId) : null;
+    const chosen = body.place && Number.isFinite(Number(body.place.lat)) && Number.isFinite(Number(body.place.lon))
+      ? { lat: Number(body.place.lat), lon: Number(body.place.lon) }
+      : null;
+
+    const result = await mutate((entries) => {
+      let existing = clientId ? entries.find((e) => ownedBy(e, clientId)) : null;
+
+      let { lat, lon } = place;
+      let region;
+      if (place.options) {
+        // Keep the earlier choice when someone edits their pin without changing the city.
+        const option = place.options.find((o) => (chosen && near(o, chosen, 0.001)) || (!chosen && existing && near(o, existing)));
+        if (!option) {
+          if (chosen) throw badRequest("Please pick one of the places in the list.");
+          return { conflict: { code: "choose_place", error: `There's more than one ${city}. Which one do you mean?`, options: place.options } };
+        }
+        ({ lat, lon, region } = option);
+      }
+
+      if (!existing) {
+        const twin = entries.find((e) => sameName(e.name, name) && near(e, { lat, lon }, 0.05));
+        if (twin && body.claim === twin.id) {
+          twin.otherClientIds = [...(twin.otherClientIds || []), clientId].filter(Boolean).slice(-MAX_OTHER_CLIENTS);
+          existing = twin;
+        } else if (twin && !body.addAnyway) {
+          return { conflict: { code: "duplicate", error: `${twin.name} in ${twin.city} is already on the map.`, duplicate: { id: twin.id, name: twin.name, city: twin.city } } };
+        }
+      }
+
       const { industry = existing?.industry, ...rest } = answers;
       const extra = { ...existing?.extra, ...rest };
       for (const key of Object.keys(extra)) if (!extra[key]) delete extra[key];
@@ -467,14 +543,16 @@ async function handleApi(req, res, url) {
         id: existing?.id || crypto.randomUUID(),
         name,
         city: place.city,
+        region: region || undefined,
         country: place.country,
         industry: industry || undefined,
         extra: Object.keys(extra).length ? extra : undefined,
-        lat: place.lat,
-        lon: place.lon,
+        lat,
+        lon,
         createdAt: existing?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        clientId: clientId || undefined,
+        clientId: existing?.clientId || clientId || undefined,
+        otherClientIds: existing?.otherClientIds?.length ? existing.otherClientIds : undefined,
       };
       if (existing) entries[entries.indexOf(existing)] = next;
       else {
@@ -483,7 +561,14 @@ async function handleApi(req, res, url) {
       }
       return next;
     });
-    return send(res, 201, publicEntry(entry, active));
+    if (result.conflict) return send(res, 409, result.conflict);
+    return send(res, 201, publicEntry(result, active));
+  }
+
+  if (url.pathname === "/api/mine" && req.method === "GET") {
+    const clientId = clean(req.headers["x-client-id"], 64);
+    const mine = clientId && (await store.load()).find((e) => ownedBy(e, clientId));
+    return mine ? send(res, 200, { id: mine.id }) : send(res, 404, { error: "No pin found for this link." });
   }
 
   if (url.pathname.startsWith("/api/admin/")) {
@@ -535,7 +620,7 @@ async function handleApi(req, res, url) {
     const admin = isAdmin(req);
     if (req.headers["x-admin-key"] && !admin) return send(res, 401, { error: "That admin key isn't right." });
     const removed = await mutate((entries) => {
-      const i = entries.findIndex((e) => e.id === match[1] && (admin || (body.clientId && e.clientId === body.clientId)));
+      const i = entries.findIndex((e) => e.id === match[1] && (admin || ownedBy(e, clean(body.clientId, 64))));
       if (i === -1) return false;
       entries.splice(i, 1);
       return true;
