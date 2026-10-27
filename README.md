@@ -76,11 +76,17 @@ Name, city and country are always required, because the pin can't be placed with
 
 Open `https://your-app/admin` and enter the `ADMIN_KEY` (Render shows it under **Environment**).
 
-**Form fields:** name, city and country are always asked. Industry and up to seven fields you add can each
-be **Off**, **Optional** or **Required**, and renamed. A field can be plain text or a **web link** (for
-example LinkedIn), which shows as a clickable link in the map popup. Turning a field off hides it and
-its answers without deleting them. The settings are stored next to the entries (Upstash key
-`city-map:entries:settings`, or `data/settings.json`).
+**Form fields:** name, city and country are always asked. Under **Popular fields** you can switch on
+Industry, Job title, Company, LinkedIn, Instagram, Website and "Ask me about", and mark any of them
+required. LinkedIn and Instagram accept just a username (`@dana`), which is turned into a link. Under
+**Your own fields** you can add up to eight more, each plain text or a web link. Links show as clickable
+links in the map popup. Turning a field off hides it and its answers without deleting them. The
+settings are stored next to the entries (Upstash key `city-map:entries:settings`, or `data/settings.json`).
+
+**Backup:** **Download backup (.json)** saves all entries and field settings. **Restore from backup**
+puts a file like that back, replacing what's there now. **Download spreadsheet (.csv)** is for opening
+in Excel or Google Sheets. Free Upstash databases can be deleted after long inactivity, so download a
+backup now and then.
 
 **Removing entries:** use **Delete** next to any entry. From the command line:
 

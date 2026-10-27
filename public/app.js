@@ -69,9 +69,9 @@
   for (const f of FIELDS) {
     const input = el("input", {
       id: `field-${f.id}`,
-      type: f.type === "link" ? "url" : "text",
+      type: f.type === "link" && !f.handleBase ? "url" : "text",
       maxLength: f.type === "link" ? 300 : f.id === "industry" ? 60 : 100,
-      placeholder: f.id === "industry" ? "e.g. Finance, Tech, Healthcare" : f.type === "link" ? "e.g. linkedin.com/in/yourname" : "",
+      placeholder: f.placeholder || "",
       required: f.mode === "required",
     });
     if (f.id === "industry") {

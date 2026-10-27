@@ -89,17 +89,41 @@ function mutate(fn) {
 }
 
 // ---------- form fields ----------
-// Name, city and country are fixed. Everything else is configurable from /admin.
-// Industry is built in (stored as entry.industry, used by the filter); other answers live in entry.extra.
+// Name, city and country are fixed. On top of those come the preset fields below (switched on/off in
+// /admin) and up to MAX_CUSTOM_FIELDS fields the admin makes up.
+// Industry is stored as entry.industry (the filter uses it); all other answers live in entry.extra.
 
 const FIELD_MODES = ["off", "optional", "required"];
 const FIELD_TYPES = ["text", "link"];
-const MAX_FIELDS = 8;
-const DEFAULT_FIELDS = [{ id: "industry", label: "Industry", type: "text", mode: INDUSTRY_REQUIRED ? "required" : "optional" }];
+const MAX_CUSTOM_FIELDS = 8;
+// handleBase lets people type just a handle ("@dana" or "dana") instead of a full link.
+const PRESET_FIELDS = [
+  { id: "industry", label: "Industry", type: "text", placeholder: "e.g. Finance, Tech, Healthcare" },
+  { id: "job-title", label: "Job title", type: "text", placeholder: "e.g. Product designer" },
+  { id: "company", label: "Company", type: "text", placeholder: "e.g. Acme Ltd" },
+  { id: "linkedin", label: "LinkedIn", type: "link", placeholder: "linkedin.com/in/yourname", handleBase: "https://www.linkedin.com/in/" },
+  { id: "instagram", label: "Instagram", type: "link", placeholder: "@yourname", handleBase: "https://www.instagram.com/" },
+  { id: "website", label: "Website", type: "link", placeholder: "e.g. yoursite.com" },
+  { id: "ask-me-about", label: "Ask me about", type: "text", placeholder: "e.g. hiking, startups, good coffee" },
+];
+const PRESET_IDS = new Set(PRESET_FIELDS.map((f) => f.id));
+const DEFAULT_MODES = { industry: INDUSTRY_REQUIRED ? "required" : "optional" };
+
+// Saved settings only hold modes for presets; labels, types and order always come from PRESET_FIELDS.
+function resolveFields(saved) {
+  const byId = new Map((saved || []).map((f) => [f.id, f]));
+  const presets = PRESET_FIELDS.map((p) => ({ ...p, preset: true, mode: byId.get(p.id)?.mode || DEFAULT_MODES[p.id] || "off" }));
+  const custom = (saved || []).filter((f) => !PRESET_IDS.has(f.id)).map((f) => ({ ...f, placeholder: f.type === "link" ? "https://…" : "" }));
+  return [...presets, ...custom];
+}
+
+function storedFields(fields) {
+  return fields.map((f) => (f.preset ? { id: f.id, mode: f.mode } : { id: f.id, label: f.label, type: f.type, mode: f.mode }));
+}
 
 let fieldsCache = null;
 async function getFields() {
-  if (!fieldsCache) fieldsCache = (await settingsStore.load())?.fields || DEFAULT_FIELDS;
+  if (!fieldsCache) fieldsCache = resolveFields((await settingsStore.load())?.fields);
   return fieldsCache;
 }
 
@@ -108,24 +132,29 @@ async function activeFields() {
 }
 
 function validateFields(input) {
-  if (!Array.isArray(input) || input.length > MAX_FIELDS) throw badRequest(`You can have up to ${MAX_FIELDS} fields.`);
+  if (!Array.isArray(input)) throw badRequest("Invalid fields.");
   const seen = new Set();
-  const fields = input.map((f) => {
+  const saved = input.map((f) => {
     const id = String(f?.id || "");
     if (!/^[a-z0-9-]{1,40}$/.test(id) || seen.has(id)) throw badRequest("Invalid field id.");
     seen.add(id);
+    if (!FIELD_MODES.includes(f.mode)) throw badRequest("Invalid field setting.");
+    if (PRESET_IDS.has(id)) return { id, mode: f.mode };
     const label = clean(f.label, 40);
     if (!label) throw badRequest("Every field needs a name.");
-    if (!FIELD_MODES.includes(f.mode)) throw badRequest(`Invalid setting for "${label}".`);
-    const type = id === "industry" ? "text" : f.type;
-    if (!FIELD_TYPES.includes(type)) throw badRequest(`Invalid type for "${label}".`);
-    return { id, label, type, mode: f.mode };
+    if (!FIELD_TYPES.includes(f.type)) throw badRequest(`Invalid type for "${label}".`);
+    return { id, label, type: f.type, mode: f.mode };
   });
-  if (!seen.has("industry")) throw badRequest("Industry can be turned off but not removed.");
-  return fields;
+  if (saved.filter((f) => !PRESET_IDS.has(f.id)).length > MAX_CUSTOM_FIELDS) {
+    throw badRequest(`You can add up to ${MAX_CUSTOM_FIELDS} of your own fields.`);
+  }
+  return resolveFields(saved);
 }
 
-function normalizeLink(value) {
+function normalizeLink(value, handleBase) {
+  if (handleBase && /^@?[\w.-]+$/.test(value) && !value.toLowerCase().includes(new URL(handleBase).hostname.replace(/^www\./, ""))) {
+    value = handleBase + value.replace(/^@/, "");
+  }
   try {
     const url = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`);
     if (!/^https?:$/.test(url.protocol) || !url.hostname.includes(".")) return null;
@@ -135,8 +164,34 @@ function normalizeLink(value) {
   }
 }
 
-function fieldValue(entry, id) {
-  return id === "industry" ? entry.industry : entry.extra?.[id];
+function restoredEntry(e) {
+  if (!e || typeof e !== "object") return null;
+  const name = clean(e.name, 40);
+  const city = clean(e.city, 80);
+  const country = clean(e.country, 60);
+  const lat = Number(e.lat);
+  const lon = Number(e.lon);
+  if (!name || !city || !country || !(Math.abs(lat) <= 90) || !(Math.abs(lon) <= 180)) return null;
+  const extra = {};
+  if (e.extra && typeof e.extra === "object") {
+    for (const [key, value] of Object.entries(e.extra)) {
+      if (/^[a-z0-9-]{1,40}$/.test(key) && clean(value, 300)) extra[key] = clean(value, 300);
+    }
+  }
+  const date = (v) => (typeof v === "string" && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : new Date().toISOString());
+  return {
+    id: typeof e.id === "string" && /^[\w-]{1,64}$/.test(e.id) ? e.id : crypto.randomUUID(),
+    name,
+    city,
+    country,
+    industry: clean(e.industry, 100) || undefined,
+    extra: Object.keys(extra).length ? extra : undefined,
+    lat,
+    lon,
+    createdAt: date(e.createdAt),
+    updatedAt: date(e.updatedAt),
+    clientId: clean(e.clientId, 64) || undefined,
+  };
 }
 
 function badRequest(message) {
@@ -310,12 +365,12 @@ function send(res, status, body, headers = {}) {
   res.end(isJson ? JSON.stringify(body) : body);
 }
 
-async function readJson(req) {
+async function readJson(req, maxBytes = 10_000) {
   let size = 0;
   const chunks = [];
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 10_000) throw Object.assign(new Error("Request too large"), { status: 413 });
+    if (size > maxBytes) throw Object.assign(new Error("Request too large"), { status: 413 });
     chunks.push(chunk);
   }
   try {
@@ -388,8 +443,8 @@ async function handleApi(req, res, url) {
     for (const f of active) {
       // Pages opened before the field settings existed send industry at the top level.
       let value = clean(body.fields?.[f.id] ?? (f.id === "industry" ? body.industry : ""), f.type === "link" ? 300 : 100);
-      if (value && f.type === "link" && !(value = normalizeLink(value))) {
-        return send(res, 400, { error: `"${f.label}" needs to be a web address, like linkedin.com/in/yourname.` });
+      if (value && f.type === "link" && !(value = normalizeLink(value, f.handleBase))) {
+        return send(res, 400, { error: `"${f.label}" needs to be a web address, like ${f.handleBase ? f.placeholder : "example.com"}.` });
       }
       if (!value && f.mode === "required") return send(res, 400, { error: `Please fill in ${f.label}.` });
       answers[f.id] = value;
@@ -442,13 +497,35 @@ async function handleApi(req, res, url) {
       return send(res, 200, entries.map((e) => publicEntry(e)));
     }
     if (url.pathname === "/api/admin/fields" && req.method === "GET") {
-      return send(res, 200, { fields: await getFields(), maxFields: MAX_FIELDS });
+      return send(res, 200, { fields: await getFields(), maxCustom: MAX_CUSTOM_FIELDS });
     }
     if (url.pathname === "/api/admin/fields" && req.method === "PUT") {
       const fields = validateFields((await readJson(req)).fields);
-      await settingsStore.save({ fields });
+      await settingsStore.save({ fields: storedFields(fields) });
       fieldsCache = fields;
-      return send(res, 200, { fields, maxFields: MAX_FIELDS });
+      return send(res, 200, { fields, maxCustom: MAX_CUSTOM_FIELDS });
+    }
+    if (url.pathname === "/api/admin/backup" && req.method === "GET") {
+      const [entries, fields] = await Promise.all([store.load(), getFields()]);
+      const backup = { app: "group-map", version: 1, exportedAt: new Date().toISOString(), fields: storedFields(fields), entries };
+      return send(res, 200, backup, { "Content-Disposition": `attachment; filename="group-map-backup-${backup.exportedAt.slice(0, 10)}.json"` });
+    }
+    if (url.pathname === "/api/admin/restore" && req.method === "POST") {
+      const backup = await readJson(req, 5_000_000);
+      if (backup?.app !== "group-map" || !Array.isArray(backup.entries)) throw badRequest("That file isn't a group map backup.");
+      const fields = validateFields(Array.isArray(backup.fields) ? backup.fields : []);
+      const ids = new Set();
+      const restored = [];
+      for (const raw of backup.entries.slice(0, MAX_ENTRIES)) {
+        const e = restoredEntry(raw);
+        if (!e || ids.has(e.id)) continue;
+        ids.add(e.id);
+        restored.push(e);
+      }
+      await mutate((entries) => entries.splice(0, entries.length, ...restored));
+      await settingsStore.save({ fields: storedFields(fields) });
+      fieldsCache = fields;
+      return send(res, 200, { restored: restored.length, skipped: backup.entries.length - restored.length });
     }
   }
 
