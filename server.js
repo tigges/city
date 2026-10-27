@@ -384,6 +384,58 @@ function near(a, b, tolerance = 0.01) {
   return Math.abs(a.lat - b.lat) < tolerance && Math.abs(a.lon - b.lon) < tolerance;
 }
 
+// Admins can save without filling required fields, e.g. to fix a typo on an entry made before a field existed.
+function readAnswers(body, fields, enforceRequired = true) {
+  const answers = {};
+  for (const f of fields) {
+    // Pages opened before the field settings existed send industry at the top level.
+    let value = clean(body.fields?.[f.id] ?? (f.id === "industry" ? body.industry : ""), f.type === "link" ? 300 : 100);
+    if (value && f.type === "link" && !(value = normalizeLink(value, f.handleBase))) {
+      throw badRequest(`"${f.label}" needs to be a web address, like ${f.handleBase ? f.placeholder : "example.com"}.`);
+    }
+    if (!value && enforceRequired && f.mode === "required") throw badRequest(`Please fill in ${f.label}.`);
+    answers[f.id] = value;
+  }
+  return answers;
+}
+
+async function locate(city, country) {
+  let place;
+  try {
+    place = await geocode(city, country);
+  } catch {
+    throw Object.assign(new Error("Couldn't reach the map service. Please try again."), { status: 502 });
+  }
+  if (!place) throw Object.assign(new Error(`We couldn't find "${city}, ${country}". Check the spelling?`), { status: 422 });
+  return place;
+}
+
+function chosenPlace(body) {
+  return body.place && Number.isFinite(Number(body.place.lat)) && Number.isFinite(Number(body.place.lon))
+    ? { lat: Number(body.place.lat), lon: Number(body.place.lon) }
+    : null;
+}
+
+// Returns the coordinates to store, or a conflict asking which of several same-named places is meant.
+// `existing` keeps an earlier choice when someone edits their pin without changing the city.
+function pickPlace(place, city, chosen, existing) {
+  if (!place.options) return { lat: place.lat, lon: place.lon, region: undefined };
+  const option = place.options.find((o) => (chosen && near(o, chosen, 0.001)) || (!chosen && existing && near(o, existing)));
+  if (!option) {
+    if (chosen) throw badRequest("Please pick one of the places in the list.");
+    return { conflict: { code: "choose_place", error: `There's more than one ${city}. Which one do you mean?`, options: place.options } };
+  }
+  return { lat: option.lat, lon: option.lon, region: option.region || undefined };
+}
+
+function setAnswers(entry, answers) {
+  const { industry, ...rest } = answers;
+  if (industry !== undefined) entry.industry = industry || undefined;
+  const extra = { ...entry.extra, ...rest };
+  for (const key of Object.keys(extra)) if (!extra[key]) delete extra[key];
+  entry.extra = Object.keys(extra).length ? extra : undefined;
+}
+
 function publicEntry({ clientId, otherClientIds, ...rest }, active) {
   if (!active) return rest;
   const out = { ...rest };
@@ -488,43 +540,16 @@ async function handleApi(req, res, url) {
     if (!name || !city || !country) return send(res, 400, { error: "Please fill in your name, city and country." });
 
     const active = await activeFields();
-    const answers = {};
-    for (const f of active) {
-      // Pages opened before the field settings existed send industry at the top level.
-      let value = clean(body.fields?.[f.id] ?? (f.id === "industry" ? body.industry : ""), f.type === "link" ? 300 : 100);
-      if (value && f.type === "link" && !(value = normalizeLink(value, f.handleBase))) {
-        return send(res, 400, { error: `"${f.label}" needs to be a web address, like ${f.handleBase ? f.placeholder : "example.com"}.` });
-      }
-      if (!value && f.mode === "required") return send(res, 400, { error: `Please fill in ${f.label}.` });
-      answers[f.id] = value;
-    }
-
-    let place;
-    try {
-      place = await geocode(city, country);
-    } catch {
-      return send(res, 502, { error: "Couldn't reach the map service. Please try again." });
-    }
-    if (!place) return send(res, 422, { error: `We couldn't find "${city}, ${country}". Check the spelling?` });
-
-    const chosen = body.place && Number.isFinite(Number(body.place.lat)) && Number.isFinite(Number(body.place.lon))
-      ? { lat: Number(body.place.lat), lon: Number(body.place.lon) }
-      : null;
+    const answers = readAnswers(body, active);
+    const place = await locate(city, country);
+    const chosen = chosenPlace(body);
 
     const result = await mutate((entries) => {
       let existing = clientId ? entries.find((e) => ownedBy(e, clientId)) : null;
 
-      let { lat, lon } = place;
-      let region;
-      if (place.options) {
-        // Keep the earlier choice when someone edits their pin without changing the city.
-        const option = place.options.find((o) => (chosen && near(o, chosen, 0.001)) || (!chosen && existing && near(o, existing)));
-        if (!option) {
-          if (chosen) throw badRequest("Please pick one of the places in the list.");
-          return { conflict: { code: "choose_place", error: `There's more than one ${city}. Which one do you mean?`, options: place.options } };
-        }
-        ({ lat, lon, region } = option);
-      }
+      const picked = pickPlace(place, city, chosen, existing);
+      if (picked.conflict) return picked;
+      const { lat, lon, region } = picked;
 
       if (!existing) {
         const twin = entries.find((e) => sameName(e.name, name) && near(e, { lat, lon }, 0.05));
@@ -583,6 +608,63 @@ async function handleApi(req, res, url) {
     if (url.pathname === "/api/admin/entries" && req.method === "GET") {
       const entries = await store.load();
       return send(res, 200, entries.map((e) => publicEntry(e)));
+    }
+    const entryMatch = url.pathname.match(/^\/api\/admin\/entries\/([\w-]+)$/);
+    if (entryMatch && req.method === "PUT") {
+      const body = await readJson(req);
+      const name = clean(body.name, 60);
+      const city = clean(body.city, 80);
+      const country = clean(body.country, 60);
+      if (!name || !city || !country) throw badRequest("Name, city and country can't be empty.");
+      const sent = (await getFields()).filter((f) => body.fields && f.id in body.fields);
+      const answers = readAnswers(body, sent, false);
+      const before = (await store.load()).find((e) => e.id === entryMatch[1]);
+      if (!before) return send(res, 404, { error: "Entry not found. Someone may have removed it." });
+      // Only look the place up again when it actually changed, so fixing a name doesn't move the pin.
+      const moved = !sameName(city, before.city) || !sameName(country, before.country);
+      const place = moved ? await locate(city, country) : null;
+      const chosen = chosenPlace(body);
+
+      const result = await mutate((entries) => {
+        const entry = entries.find((e) => e.id === entryMatch[1]);
+        if (!entry) throw Object.assign(new Error("Entry not found. Someone may have removed it."), { status: 404 });
+        if (place) {
+          const picked = pickPlace(place, city, chosen, null);
+          if (picked.conflict) return picked;
+          Object.assign(entry, { city: place.city, country: place.country, lat: picked.lat, lon: picked.lon, region: picked.region });
+        } else {
+          Object.assign(entry, { city, country });
+        }
+        entry.name = name;
+        setAnswers(entry, answers);
+        entry.updatedAt = new Date().toISOString();
+        return entry;
+      });
+      if (result.conflict) return send(res, 409, result.conflict);
+      return send(res, 200, publicEntry(result));
+    }
+    // Merging keeps one entry, fills its empty answers from the other, and lets every browser that could
+    // edit either of them edit the result.
+    if (url.pathname === "/api/admin/merge" && req.method === "POST") {
+      const body = await readJson(req);
+      const result = await mutate((entries) => {
+        const keep = entries.find((e) => e.id === body.keep);
+        const drop = entries.find((e) => e.id === body.remove);
+        if (!keep || !drop) throw Object.assign(new Error("One of those entries no longer exists. Reload and try again."), { status: 404 });
+        if (keep === drop) throw badRequest("Pick two different entries.");
+        const others = [...(keep.otherClientIds || []), drop.clientId, ...(drop.otherClientIds || [])].filter(Boolean);
+        if (!keep.clientId) keep.clientId = others.shift();
+        const ids = [...new Set(others.filter((c) => c !== keep.clientId))].slice(-MAX_OTHER_CLIENTS);
+        keep.otherClientIds = ids.length ? ids : undefined;
+        if (!keep.industry && drop.industry) keep.industry = drop.industry;
+        const extra = { ...drop.extra, ...keep.extra };
+        keep.extra = Object.keys(extra).length ? extra : undefined;
+        if (drop.createdAt < keep.createdAt) keep.createdAt = drop.createdAt;
+        keep.updatedAt = new Date().toISOString();
+        entries.splice(entries.indexOf(drop), 1);
+        return keep;
+      });
+      return send(res, 200, publicEntry(result));
     }
     if (url.pathname === "/api/admin/fields" && req.method === "GET") {
       return send(res, 200, { fields: await getFields(), maxCustom: MAX_CUSTOM_FIELDS });
