@@ -95,7 +95,15 @@
         <section class="people">
           <h2>Who's here</h2>
           <div id="filters" class="filters" role="group" aria-label="Filter by industry" hidden></div>
+          <div id="list-tools" class="list-tools" hidden>
+            <input id="list-search" type="search" placeholder="Search names, cities, jobs…" autocomplete="off" aria-label="Search the list" />
+            <div class="segmented" role="group" aria-label="Order the list">
+              <button type="button" id="order-newest" aria-pressed="true">Newest</button>
+              <button type="button" id="order-country" aria-pressed="false">By country</button>
+            </div>
+          </div>
           <ul id="people-list"></ul>
+          <p id="no-match" class="empty" hidden></p>
           <p id="empty" class="empty">No one yet. Be the first to drop a pin!</p>
         </section>
       </section>
