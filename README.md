@@ -5,7 +5,11 @@ A tiny, shareable group map. Everyone who opens the link enters their **name, ci
 the URL into a WhatsApp group, optionally behind a shared password.
 
 - Mobile-first, works well inside WhatsApp's in-app browser
-- Cities are looked up automatically with OpenStreetMap, so nobody needs to know coordinates
+- Cities are looked up automatically with OpenStreetMap, so nobody needs to know coordinates. Matching cities are suggested while typing, and picking one fills in the country
+- Popups show the local time in each city, and the "You're on the map!" card shows how many people are within 50 km (30 miles in the US and UK), or who's nearest
+- When someone new joins, everyone who has the map open sees "Maria just joined from Lisbon", and the new pin pulses
+- On phones one finger scrolls the page and two fingers move the map, so people don't get stuck on it
+- Pages ask search engines not to index them, since they list people's names
 - People in the same city share one pin that shows a count, and tapping it lists their names
 - When zoomed out, nearby cities merge into one numbered bubble; tapping it zooms in until they split
 - Once there are 6 or more people, the list gets a search box and a "By country" view

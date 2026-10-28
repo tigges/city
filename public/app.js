@@ -35,12 +35,12 @@
     return node;
   }
 
-  function toast(message) {
+  function toast(message, ms = 2800) {
     const t = $("toast");
     t.textContent = message;
     t.hidden = false;
     clearTimeout(toast.timer);
-    toast.timer = setTimeout(() => (t.hidden = true), 2800);
+    toast.timer = setTimeout(() => (t.hidden = true), ms);
   }
 
   // ---------- countries datalist ----------
@@ -109,7 +109,22 @@
   }
 
   // ---------- map ----------
-  const map = L.map("map", { worldCopyJump: true, zoomControl: false }).setView([25, 10], 2);
+  // On phones the map fills most of the screen, so one finger scrolls the page and two fingers move the
+  // map (Leaflet's pinch handler pans as well as zooms).
+  const coarse = matchMedia("(pointer: coarse)").matches;
+  const map = L.map("map", { worldCopyJump: true, zoomControl: false, dragging: !coarse }).setView([25, 10], 2);
+  if (coarse) {
+    let hintTimer;
+    $("map").addEventListener("touchmove", (ev) => {
+      if (ev.touches.length !== 1) return;
+      $("map-hint").hidden = false;
+      clearTimeout(hintTimer);
+      hintTimer = setTimeout(() => ($("map-hint").hidden = true), 1500);
+    }, { passive: true });
+    $("map").addEventListener("touchstart", (ev) => {
+      if (ev.touches.length > 1) $("map-hint").hidden = true;
+    }, { passive: true });
+  }
   L.control.zoom({ position: "topright" }).addTo(map);
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
@@ -117,6 +132,7 @@
   }).addTo(map);
   const markerLayer = L.layerGroup().addTo(map);
   const markersByPlace = new Map();
+  const markerForPlace = new Map(); // place key -> its pin or the bubble it's in
 
   function placeKey(e) {
     return `${e.lat.toFixed(3)},${e.lon.toFixed(3)}`;
@@ -167,14 +183,25 @@
     return [e.city, e.region, e.country].filter(Boolean).join(", ");
   }
 
+  function localTime(timeZone) {
+    if (!timeZone) return "";
+    try {
+      return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", timeZone }).format(new Date());
+    } catch {
+      return "";
+    }
+  }
+
   function popupFor(places) {
     const box = el("div", { className: places.length > 1 ? "popup-cluster" : "" });
     const total = places.reduce((n, p) => n + p.people.length, 0);
     if (places.length > 1) box.append(el("div", { className: "popup-place", textContent: `${total} people in ${places.length} places` }));
     for (const p of places) {
       const place = placeLabel(p.people[0]);
+      const time = localTime(p.people.find((e) => e.timezone)?.timezone);
       box.append(
         el("div", { className: places.length > 1 ? "popup-sub" : "popup-place", textContent: p.people.length > 1 ? `${place} · ${p.people.length} people` : place }),
+        ...(time ? [el("div", { className: "popup-time", textContent: `🕒 ${time} there now` })] : []),
         el("ul", { className: "popup-names" }, ...[...p.people].sort((a, b) => a.name.localeCompare(b.name)).map((e) => {
           const li = el("li", { textContent: [e.name, ...textDetails(e)].join(" · ") });
           for (const a of links(e)) li.append(" · ", a);
@@ -216,7 +243,8 @@
       const span = marker.getElement()?.querySelector(".pin span");
       if (span) span.textContent = label;
     });
-    marker.bindPopup(popupFor([p]));
+    // Built when opened, so the local time is current.
+    marker.bindPopup(() => popupFor([p]));
     markersByPlace.set(p.key, marker);
     return marker;
   }
@@ -252,11 +280,13 @@
       // This can fire zoomend, which renders the markers; the render below then replaces them.
       fitPending = false;
       const bounds = L.latLngBounds(shown.map((e) => [e.lat, e.lon]));
-      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 6, animate: false });
+      // Room for bubbles at the edges, the title bar on top and the Add button at the bottom.
+      map.fitBounds(bounds, { paddingTopLeft: [48, 72], paddingBottomRight: [48, 72], maxZoom: 6, animate: false });
     }
     const reopen = [...markersByPlace].find(([, m]) => m.isPopupOpen())?.[0];
     markerLayer.clearLayers();
     markersByPlace.clear();
+    markerForPlace.clear();
     const places = new Map();
     for (const e of shown) {
       const key = placeKey(e);
@@ -264,12 +294,29 @@
       places.get(key).people.push(e);
     }
     for (const c of clusterPlaces(places.values())) {
-      (c.places.length > 1 ? clusterMarker(c.places) : placeMarker(c.places[0])).addTo(markerLayer);
+      const marker = (c.places.length > 1 ? clusterMarker(c.places) : placeMarker(c.places[0])).addTo(markerLayer);
+      for (const p of c.places) markerForPlace.set(p.key, marker);
     }
     if (reopen) markersByPlace.get(reopen)?.openPopup();
   }
 
   map.on("zoomend", renderMap);
+
+  function pulse(keys) {
+    for (const marker of new Set(keys.map((k) => markerForPlace.get(k)).filter(Boolean))) {
+      const node = marker.getElement()?.querySelector(".pin, .cluster");
+      if (!node) continue;
+      node.classList.add("pulse");
+      setTimeout(() => node.classList.remove("pulse"), 3000);
+    }
+  }
+
+  function showPeople(people) {
+    focusKey = null;
+    renderMap();
+    map.flyToBounds(L.latLngBounds(people.map((e) => [e.lat, e.lon])).pad(0.3), { duration: 0.8, maxZoom: 10 });
+    if (window.innerWidth < 900) $("map").scrollIntoView({ behavior: "smooth" });
+  }
 
   function focusEntry(e) {
     const key = placeKey(e);
@@ -345,9 +392,47 @@
     $("no-match").hidden = !(entries.length && !shown.length);
     $("no-match").textContent = query ? `No one matches "${$("list-search").value.trim()}".` : "";
     $("empty").hidden = entries.length > 0;
+    const countries = new Set(entries.map((e) => e.country)).size;
     $("stat-people").textContent = entries.length;
     $("stat-cities").textContent = new Set(entries.map(placeKey)).size;
-    $("stat-countries").textContent = new Set(entries.map((e) => e.country)).size;
+    $("stat-countries").textContent = countries;
+    $("map-bar-stats").textContent = entries.length
+      ? `${entries.length} ${entries.length === 1 ? "person" : "people"} · ${countries} ${countries === 1 ? "country" : "countries"}`
+      : "Be the first to add yourself";
+  }
+
+  $("map-bar").addEventListener("click", () => ($("me-card").hidden ? $("entry-form") : $("me-card")).scrollIntoView({ behavior: "smooth" }));
+
+  // ---------- near you ----------
+  const MILES = /^en-(US|GB)$/i.test(navigator.language);
+  const NEAR_KM = MILES ? 30 * 1.609 : 50;
+
+  function distanceKm(a, b) {
+    const rad = Math.PI / 180;
+    const h = Math.sin(((b.lat - a.lat) * rad) / 2) ** 2
+      + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(((b.lon - a.lon) * rad) / 2) ** 2;
+    return 12742 * Math.asin(Math.sqrt(h));
+  }
+
+  function formatDistance(km) {
+    const n = MILES ? km / 1.609 : km;
+    return `${(n < 10 ? Math.round(n * 10) / 10 : Math.round(n)).toLocaleString()} ${MILES ? "miles" : "km"}`;
+  }
+
+  function renderNear(mine) {
+    const btn = $("near-me");
+    const others = entries.filter((e) => e.id !== mine.id).map((e) => ({ e, km: distanceKm(mine, e) }));
+    btn.hidden = !others.length;
+    if (!others.length) return;
+    const near = others.filter((o) => o.km <= NEAR_KM);
+    if (near.length) {
+      btn.textContent = `📍 ${near.length} ${near.length === 1 ? "person" : "people"} within ${MILES ? "30 miles" : "50 km"} of you`;
+      btn.onclick = () => showPeople([mine, ...near.map((o) => o.e)]);
+    } else {
+      const nearest = others.reduce((a, b) => (b.km < a.km ? b : a));
+      btn.textContent = `📍 Nearest: ${nearest.e.name} in ${nearest.e.city}, ${formatDistance(nearest.km)} away`;
+      btn.onclick = () => focusEntry(nearest.e);
+    }
   }
 
   // ---------- my entry ----------
@@ -363,7 +448,10 @@
     $("me-actions").hidden = !(mine && editing);
     $("form-title").textContent = mine ? "Update your pin" : "Add yourself";
     $("submit").querySelector(".btn-label").textContent = mine ? "Save changes" : "Put me on the map";
-    if (mine) $("me-summary").textContent = `${mine.name} · ${mine.city}, ${mine.country}`;
+    if (mine) {
+      $("me-summary").textContent = `${mine.name} · ${mine.city}, ${mine.country}`;
+      renderNear(mine);
+    }
     $("add-fab").hidden = !!mine;
   }
 
@@ -374,20 +462,34 @@
     renderMe();
   }
 
+  let loadedOnce = false;
+
   async function load() {
     try {
       const res = await fetch("/api/entries", { cache: "no-store" });
       if (res.status === 401) return location.reload();
       if (!res.ok) throw new Error();
+      const known = new Set(entries.map((e) => e.id));
       entries = await res.json();
       if (me.entryId && !myEntry()) {
         delete me.entryId;
         saveMe();
       }
       render();
+      if (loadedOnce) announce(entries.filter((e) => !known.has(e.id) && e.id !== me.entryId));
+      loadedOnce = true;
     } catch {
       // keep showing the last known state; next poll will retry
     }
+  }
+
+  function announce(joined) {
+    if (!joined.length) return;
+    const [first] = joined;
+    toast(joined.length === 1
+      ? `👋 ${first.name} just joined from ${first.city}`
+      : `👋 ${first.name} and ${joined.length - 1} ${joined.length === 2 ? "other" : "others"} just joined`, 4500);
+    pulse(joined.map(placeKey));
   }
 
   // ---------- form ----------
@@ -419,6 +521,97 @@
   }
 
   for (const input of [...fields, ...extraInputs.values()]) input.addEventListener("input", hideChoice);
+
+  // ---------- city suggestions ----------
+  // Picking a suggestion fills in the country and pins the exact place, so the server doesn't have to
+  // guess (or ask "which Springfield?").
+  const cityInput = fields[1];
+  const suggestList = $("city-suggest");
+  let suggestions = [];
+  let activeSuggestion = -1;
+  let suggested = null; // { lat, lon, city, country } of the picked suggestion
+  let suggestTimer;
+  let suggestSeq = 0;
+
+  function closeSuggest() {
+    suggestList.hidden = true;
+    cityInput.setAttribute("aria-expanded", "false");
+    cityInput.removeAttribute("aria-activedescendant");
+    activeSuggestion = -1;
+  }
+
+  function renderSuggest() {
+    suggestList.replaceChildren(...suggestions.map((s, i) => {
+      const li = el("li", { id: `city-option-${i}`, role: "option", className: i === activeSuggestion ? "active" : "" },
+        el("strong", { textContent: s.name }),
+        el("span", { textContent: [s.region, s.country].filter((x) => x && x !== s.name).join(", ") }),
+      );
+      li.setAttribute("aria-selected", String(i === activeSuggestion));
+      li.addEventListener("click", () => pickSuggestion(s));
+      return li;
+    }));
+    suggestList.hidden = !suggestions.length;
+    cityInput.setAttribute("aria-expanded", String(!!suggestions.length));
+    if (activeSuggestion >= 0) cityInput.setAttribute("aria-activedescendant", `city-option-${activeSuggestion}`);
+  }
+
+  function pickSuggestion(s) {
+    cityInput.value = s.name;
+    fields[2].value = s.country;
+    suggested = { lat: s.lat, lon: s.lon, city: s.name, country: s.country };
+    for (const f of [cityInput, fields[2]]) f.setAttribute("aria-invalid", "false");
+    closeSuggest();
+    const next = requiredFields.find((f) => !f.value.trim());
+    if (next) next.focus();
+    else cityInput.blur();
+  }
+
+  cityInput.addEventListener("input", () => {
+    suggested = null;
+    clearTimeout(suggestTimer);
+    const q = cityInput.value.trim();
+    if (q.length < 2) {
+      suggestions = [];
+      return closeSuggest();
+    }
+    suggestTimer = setTimeout(async () => {
+      const seq = ++suggestSeq;
+      let list = [];
+      try {
+        const res = await fetch(`/api/places?q=${encodeURIComponent(q)}`);
+        if (res.ok) list = await res.json();
+      } catch {}
+      if (seq !== suggestSeq || cityInput.value.trim() !== q || document.activeElement !== cityInput) return;
+      // If the country is already filled in, its places go first.
+      const country = fold(fields[2].value.trim());
+      suggestions = country ? [...list].sort((a, b) => (fold(b.country) === country) - (fold(a.country) === country)) : list;
+      activeSuggestion = -1;
+      renderSuggest();
+    }, 250);
+  });
+
+  cityInput.addEventListener("keydown", (ev) => {
+    if (suggestList.hidden) return;
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      ev.preventDefault();
+      const n = suggestions.length;
+      if (ev.key === "ArrowDown") activeSuggestion = (activeSuggestion + 1) % n;
+      else activeSuggestion = activeSuggestion <= 0 ? n - 1 : activeSuggestion - 1;
+      renderSuggest();
+    } else if (ev.key === "Enter" && activeSuggestion >= 0) {
+      ev.preventDefault();
+      pickSuggestion(suggestions[activeSuggestion]);
+    } else if (ev.key === "Escape") {
+      closeSuggest();
+    }
+  });
+
+  // Keep focus in the input while tapping a suggestion, so blur doesn't close the list first.
+  suggestList.addEventListener("pointerdown", (ev) => ev.preventDefault());
+  cityInput.addEventListener("blur", () => setTimeout(closeSuggest, 100));
+  fields[2].addEventListener("input", () => {
+    if (suggested && fold(fields[2].value.trim()) !== fold(suggested.country)) suggested = null;
+  });
 
   form.addEventListener("submit", (ev) => {
     ev.preventDefault();
@@ -453,6 +646,7 @@
           country: fields[2].value,
           fields: Object.fromEntries([...extraInputs].map(([id, input]) => [id, input.value])),
           clientId: me.clientId,
+          suggested: suggested && { lat: suggested.lat, lon: suggested.lon },
           ...choice,
         }),
       });
@@ -490,6 +684,7 @@
     const mine = myEntry();
     if (!mine) return;
     editing = true;
+    suggested = null;
     fields[0].value = mine.name;
     fields[1].value = mine.city;
     fields[2].value = mine.country;
