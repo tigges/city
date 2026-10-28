@@ -185,6 +185,7 @@ function restoredEntry(e) {
     city,
     region: clean(e.region, 80) || undefined,
     country,
+    timezone: validTimezone(e.timezone),
     industry: clean(e.industry, 100) || undefined,
     extra: Object.keys(extra).length ? extra : undefined,
     lat,
@@ -245,7 +246,15 @@ async function openMeteo(city, country, code) {
   const { results = [] } = await getJson(url);
   const matches = results.filter((r) => sameCountry(r.country_code, r.country, code, country));
   const hit = matches[0];
-  return hit && { lat: hit.latitude, lon: hit.longitude, country: hit.country, options: placeOptions(matches, city) };
+  return hit && {
+    lat: hit.latitude,
+    lon: hit.longitude,
+    country: hit.country,
+    timezone: hit.timezone,
+    options: placeOptions(matches, city),
+    // Every same-named place, so a pick from the type-ahead suggestions (a small Richmond, say) is accepted.
+    candidates: matches.map((m) => ({ lat: m.latitude, lon: m.longitude, region: m.admin1 || "", timezone: m.timezone })),
+  };
 }
 
 // When a country has several sizeable places with this name (Springfield, Portland, Frankfurt), the
@@ -260,7 +269,7 @@ function placeOptions(matches, city) {
     const label = [m.name, m.admin1].filter(Boolean).join(", ");
     if (seen.has(label)) continue;
     seen.add(label);
-    options.push({ label, region: m.admin1 || "", lat: m.latitude, lon: m.longitude });
+    options.push({ label, region: m.admin1 || "", lat: m.latitude, lon: m.longitude, timezone: m.timezone });
   }
   return options.length > 1 ? options.slice(0, 5) : undefined;
 }
@@ -305,7 +314,9 @@ async function geocode(city, country) {
   if (!hit && failures === providers.length) throw new Error("All geocoders failed");
 
   const displayCity = city === city.toLowerCase() ? city.replace(/(^|[\s-])\p{L}/gu, (m) => m.toUpperCase()) : city;
-  const result = hit ? { lat: hit.lat, lon: hit.lon, city: displayCity, country: hit.country || countryName, options: hit.options } : null;
+  const result = hit
+    ? { lat: hit.lat, lon: hit.lon, city: displayCity, country: hit.country || countryName, timezone: hit.timezone, options: hit.options, candidates: hit.candidates }
+    : null;
   geoCache.set(key, result);
   return result;
 }
@@ -313,12 +324,83 @@ async function geocode(city, country) {
 // ---------- helpers ----------
 
 const rateBuckets = new Map();
-function rateLimited(key) {
+function rateLimited(key, perMinute = 10) {
   const now = Date.now();
   const recent = (rateBuckets.get(key) || []).filter((t) => now - t < 60_000);
   recent.push(now);
   rateBuckets.set(key, recent);
-  return recent.length > 10;
+  return recent.length > perMinute;
+}
+
+// ---------- city suggestions & time zones ----------
+
+const suggestCache = new Map();
+
+async function placeSuggestions(q) {
+  const key = q.toLowerCase();
+  if (suggestCache.has(key)) return suggestCache.get(key);
+  const url = new URL("https://geocoding-api.open-meteo.com/v1/search");
+  url.search = new URLSearchParams({ name: q, count: "15", language: "en", format: "json" });
+  const { results = [] } = await getJson(url);
+  const seen = new Set();
+  const out = [];
+  for (const r of results) {
+    if (!/^PPL/.test(r.feature_code || "") || !r.country) continue;
+    const label = [r.name, r.admin1, r.country].filter(Boolean).join(", ");
+    if (seen.has(label)) continue;
+    seen.add(label);
+    out.push({ name: r.name, region: r.admin1 || "", country: r.country, lat: r.latitude, lon: r.longitude });
+    if (out.length === 6) break;
+  }
+  if (suggestCache.size > 500) suggestCache.clear();
+  suggestCache.set(key, out);
+  return out;
+}
+
+function validTimezone(tz) {
+  if (typeof tz !== "string" || tz.length > 64) return undefined;
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: tz });
+    return tz;
+  } catch {
+    return undefined;
+  }
+}
+
+async function timezoneAt(lat, lon) {
+  const url = new URL("https://api.open-meteo.com/v1/forecast");
+  url.search = new URLSearchParams({ latitude: String(lat), longitude: String(lon), timezone: "auto", forecast_days: "1" });
+  return validTimezone((await getJson(url)).timezone);
+}
+
+// Pins from before time zones were stored, or found by the fallback geocoders, get theirs looked up here.
+let backfilling = false;
+async function backfillTimezones() {
+  if (backfilling) return;
+  backfilling = true;
+  try {
+    const found = new Map();
+    for (const e of (await store.load()).filter((x) => !x.timezone).slice(0, 200)) {
+      const key = `${e.lat},${e.lon}`;
+      if (found.has(key)) continue;
+      try {
+        found.set(key, await timezoneAt(e.lat, e.lon));
+      } catch (err) {
+        console.warn(`Time zone lookup failed: ${err.message}`);
+        break;
+      }
+    }
+    if (![...found.values()].some(Boolean)) return;
+    await mutate((entries) => {
+      for (const e of entries) if (!e.timezone && found.get(`${e.lat},${e.lon}`)) e.timezone = found.get(`${e.lat},${e.lon}`);
+    });
+  } finally {
+    backfilling = false;
+  }
+}
+
+function startBackfill() {
+  backfillTimezones().catch((err) => console.warn(`Time zone backfill failed: ${err.message}`));
 }
 
 function clientIp(req) {
@@ -410,22 +492,28 @@ async function locate(city, country) {
   return place;
 }
 
-function chosenPlace(body) {
-  return body.place && Number.isFinite(Number(body.place.lat)) && Number.isFinite(Number(body.place.lon))
-    ? { lat: Number(body.place.lat), lon: Number(body.place.lon) }
-    : null;
+function coords(value) {
+  return value && Number.isFinite(Number(value.lat)) && Number.isFinite(Number(value.lon)) ? { lat: Number(value.lat), lon: Number(value.lon) } : null;
 }
 
 // Returns the coordinates to store, or a conflict asking which of several same-named places is meant.
+// `chosen` is an answer to that question, so it must be one of the options. `suggested` comes from the
+// type-ahead list and is only used if it's one of the places the lookup found; otherwise it's ignored.
 // `existing` keeps an earlier choice when someone edits their pin without changing the city.
-function pickPlace(place, city, chosen, existing) {
-  if (!place.options) return { lat: place.lat, lon: place.lon, region: undefined };
-  const option = place.options.find((o) => (chosen && near(o, chosen, 0.001)) || (!chosen && existing && near(o, existing)));
-  if (!option) {
-    if (chosen) throw badRequest("Please pick one of the places in the list.");
-    return { conflict: { code: "choose_place", error: `There's more than one ${city}. Which one do you mean?`, options: place.options } };
+function pickPlace(place, city, { chosen, suggested, existing } = {}) {
+  // The region is shown when it tells same-named places apart, or when it isn't the obvious match.
+  const result = (o) => ({ lat: o.lat, lon: o.lon, region: place.options || !near(o, place) ? o.region || undefined : undefined, timezone: o.timezone });
+  if (chosen) {
+    const option = (place.options || place.candidates || []).find((o) => near(o, chosen, 0.001));
+    if (option) return result(option);
+    if (place.options) throw badRequest("Please pick one of the places in the list.");
   }
-  return { lat: option.lat, lon: option.lon, region: option.region || undefined };
+  const hinted = suggested && (place.candidates || place.options || []).find((o) => near(o, suggested, 0.001));
+  if (hinted) return result(hinted);
+  if (!place.options) return { lat: place.lat, lon: place.lon, region: undefined, timezone: place.timezone };
+  const kept = existing && place.options.find((o) => near(o, existing));
+  if (kept) return result(kept);
+  return { conflict: { code: "choose_place", error: `There's more than one ${city}. Which one do you mean?`, options: place.options } };
 }
 
 function setAnswers(entry, answers) {
@@ -500,7 +588,9 @@ const ASSET_VERSION = crypto.createHash("sha256")
 
 function sendHtml(req, res, status, html) {
   html = html.replaceAll("{{ORIGIN}}", siteOrigin(req)).replaceAll("{{ASSET_VERSION}}", ASSET_VERSION);
-  send(res, status, html, { "Content-Type": STATIC_TYPES[".html"], "Cache-Control": "no-cache" });
+  // The map lists people's names, so keep it out of search engines even if the link leaks. A robots.txt
+  // Disallow would be worse: crawlers couldn't see this, and link-preview bots might skip the page.
+  send(res, status, html, { "Content-Type": STATIC_TYPES[".html"], "Cache-Control": "no-cache", "X-Robots-Tag": "noindex, nofollow" });
 }
 
 // Where to go after logging in, so links like a personal edit link survive the password page.
@@ -550,14 +640,13 @@ async function handleApi(req, res, url) {
     const active = await activeFields();
     const answers = readAnswers(body, active);
     const place = await locate(city, country);
-    const chosen = chosenPlace(body);
 
     const result = await mutate((entries) => {
       let existing = clientId ? entries.find((e) => ownedBy(e, clientId)) : null;
 
-      const picked = pickPlace(place, city, chosen, existing);
+      const picked = pickPlace(place, city, { chosen: coords(body.place), suggested: coords(body.suggested), existing });
       if (picked.conflict) return picked;
-      const { lat, lon, region } = picked;
+      const { lat, lon, region, timezone } = picked;
 
       if (!existing) {
         const twin = entries.find((e) => sameName(e.name, name) && near(e, { lat, lon }, 0.05));
@@ -581,6 +670,7 @@ async function handleApi(req, res, url) {
         city: place.city,
         region: region || undefined,
         country: place.country,
+        timezone: timezone || (existing && near(existing, { lat, lon }, 0.001) ? existing.timezone : undefined),
         industry: industry || undefined,
         extra: Object.keys(extra).length ? extra : undefined,
         lat,
@@ -598,7 +688,20 @@ async function handleApi(req, res, url) {
       return next;
     });
     if (result.conflict) return send(res, 409, result.conflict);
+    if (!result.timezone) startBackfill();
     return send(res, 201, publicEntry(result, active));
+  }
+
+  if (url.pathname === "/api/places" && req.method === "GET") {
+    const q = clean(url.searchParams.get("q"), 80);
+    if (q.length < 2) return send(res, 200, []);
+    if (rateLimited(`places:${clientIp(req)}`, 90)) return send(res, 429, { error: "Too many lookups, please wait a moment." });
+    try {
+      return send(res, 200, await placeSuggestions(q), { "Cache-Control": "private, max-age=3600" });
+    } catch (err) {
+      console.warn(`City suggestions failed for "${q}": ${err.message}`);
+      return send(res, 200, []);
+    }
   }
 
   if (url.pathname === "/api/mine" && req.method === "GET") {
@@ -631,15 +734,16 @@ async function handleApi(req, res, url) {
       // Only look the place up again when it actually changed, so fixing a name doesn't move the pin.
       const moved = !sameName(city, before.city) || !sameName(country, before.country);
       const place = moved ? await locate(city, country) : null;
-      const chosen = chosenPlace(body);
 
       const result = await mutate((entries) => {
         const entry = entries.find((e) => e.id === entryMatch[1]);
         if (!entry) throw Object.assign(new Error("Entry not found. Someone may have removed it."), { status: 404 });
         if (place) {
-          const picked = pickPlace(place, city, chosen, null);
+          const picked = pickPlace(place, city, { chosen: coords(body.place) });
           if (picked.conflict) return picked;
+          if (!near(entry, picked, 0.001)) entry.timezone = undefined;
           Object.assign(entry, { city: place.city, country: place.country, lat: picked.lat, lon: picked.lon, region: picked.region });
+          if (picked.timezone) entry.timezone = picked.timezone;
         } else {
           Object.assign(entry, { city, country });
         }
@@ -649,6 +753,7 @@ async function handleApi(req, res, url) {
         return entry;
       });
       if (result.conflict) return send(res, 409, result.conflict);
+      if (!result.timezone) startBackfill();
       return send(res, 200, publicEntry(result));
     }
     // Merging keeps one entry, fills its empty answers from the other, and lets every browser that could
@@ -703,6 +808,7 @@ async function handleApi(req, res, url) {
       await mutate((entries) => entries.splice(0, entries.length, ...restored));
       await settingsStore.save({ fields: storedFields(fields) });
       fieldsCache = fields;
+      startBackfill();
       return send(res, 200, { restored: restored.length, skipped: backup.entries.length - restored.length });
     }
   }
@@ -743,8 +849,7 @@ async function serveStatic(req, res, url) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   try {
-    if (url.pathname === "/healthz") return send(res, 200, "ok");
-    if (SITE_PASSWORD) {
+    if (url.pathname === "/healthz") return send(res, 200, "ok");    if (SITE_PASSWORD) {
       if (url.pathname === "/login" && req.method === "POST") return await handleLogin(req, res);
       const isAsset = /\.(css|svg|png|ico)$/.test(url.pathname);
       if (!isAsset && !isAuthed(req) && !isAdmin(req)) {
@@ -764,4 +869,5 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Group map running on http://localhost:${PORT} (storage: ${USE_REDIS ? "Upstash Redis" : DATA_FILE})`);
   console.log(SITE_PASSWORD ? "Site password is on." : "No SITE_PASSWORD set: anyone with the link can see the map.");
+  startBackfill();
 });

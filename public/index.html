@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>{{TITLE}}</title>
     <meta name="description" content="Add your name, city and country and see where everyone in the group is on a live map." />
+    <meta name="robots" content="noindex, nofollow" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="{{TITLE}}" />
     <meta property="og:description" content="Add yourself to the group map: name, city, country. Takes 10 seconds." />
@@ -47,10 +48,14 @@
             <span>Name</span>
             <input id="name" name="name" type="text" maxlength="60" autocomplete="name" autocapitalize="words" placeholder="e.g. Maria Silva" required />
           </label>
-          <label class="field">
-            <span>City</span>
-            <input id="city" name="city" type="text" maxlength="80" autocomplete="address-level2" placeholder="e.g. Lisbon" required />
-          </label>
+          <div class="suggest-wrap">
+            <label class="field">
+              <span>City</span>
+              <input id="city" name="city" type="text" maxlength="80" autocomplete="off" placeholder="e.g. Lisbon" required
+                role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="city-suggest" />
+            </label>
+            <ul id="city-suggest" class="suggest" role="listbox" aria-label="Matching cities" hidden></ul>
+          </div>
           <label class="field">
             <span>Country</span>
             <input id="country" name="country" type="text" maxlength="60" list="countries" autocomplete="country-name" placeholder="Start typing…" required />
@@ -79,6 +84,7 @@
           <div class="me-text">
             <strong>You're on the map!</strong>
             <span id="me-summary"></span>
+            <button type="button" id="near-me" class="near-me" hidden></button>
           </div>
           <button type="button" id="edit-me" class="btn-ghost">Edit</button>
           <div class="me-links">
@@ -110,6 +116,11 @@
 
       <section class="map-wrap">
         <div id="map" aria-label="Map of the group"></div>
+        <button type="button" id="map-bar" class="map-bar">
+          <strong>{{TITLE}}</strong>
+          <span id="map-bar-stats"></span>
+        </button>
+        <div id="map-hint" class="map-hint" aria-hidden="true" hidden>Use two fingers to move the map</div>
         <button type="button" id="add-fab" class="add-fab" hidden>📍 Add yourself</button>
       </section>
     </main>
